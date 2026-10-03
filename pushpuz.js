@@ -4,16 +4,22 @@
   Odd count sits on the well. Even count straddles it.
   Match-3 on a straight slot line: neighbors in a row, the same slot
   across rows, or a diagonal stepping one or two slots per row.
-  Two resolved shots per turn. Opponent front cannot match the last shot.
-  Empty rows refill from the board bag at end of turn. Refill does not fire matches.
+  Each turn deals a hand of two. The hand is the shot count. No refill
+  between shots. Fire any time a disc is in the hand. Shots during a pop
+  wait at the top of the chosen row and launch when that pop ends.
+  Match check waits until every fired disc has settled.
+  The first match of a resolve pays nothing. Each later match in that
+  check, or in a settle after the first pop, is a combo and pays one disc.
+  A match longer than 3 is a big and pays one disc. Awards sit on the top
+  rail until the cascade finishes, then bump into the hand. Empty rows
+  refill at end of turn and do not match.
   A visible disc on your end slot loses. Animation is not the grid.
 */
 
 const ROWS = 7;
 const END = 15;
 const MATCH = 3;
-const QLEN = 3;
-const SHOTS = 2;
+const HAND = 2;
 const BOARD_SETS = 3;
 const COLS = [
   { fill: "#ff3b5c", hi: "#ffb6c6" },
@@ -34,9 +40,10 @@ const APP_VERSION = ((document.getElementById("puz-version") || {}).textContent 
 
 const state = {
   w: 0, h: 0, viewW: 0, viewH: 0, dpr: 1, portrait: false,
-  mode: "title", phase: "idle", phaseT: 0, turn: 0, shotsLeft: SHOTS,
-  rows: [], bags: [[], []], boardBag: [], chain: 0, chainT: 0,
-  loser: -1, last: 0, shot: null,
+  mode: "title", phase: "idle", phaseT: 0, turn: 0,
+  rows: [], bags: [[], []], stock: [[], []], boardBag: [],
+  matchCount: 0, comboT: 0, bigText: "", bigT: 0, awards: [],
+  loser: -1, last: 0, flyers: [], pending: [],
   boardLeft: 0, boardRight: 0, boardTop: 0, pitch: 0, half: 0, discR: 0, wellX: 0
 };
 
@@ -86,31 +93,18 @@ function freshRows() {
 }
 
 function topUp(p) {
-  if (state.bags[p].length >= QLEN) return;
+  if (state.stock[p].length) return;
   const more = colorPackOfSets(2);
-  for (let k = 0; k < more.length; k++) state.bags[p].push(more[k]);
+  for (let k = 0; k < more.length; k++) state.stock[p].push(more[k]);
 }
 
-function settleFront(p, ban) {
-  const bag = state.bags[p];
-  let i = 0;
-  while (true) {
-    if (i >= bag.length) {
-      const more = colorPackOfSets(2);
-      for (let k = 0; k < more.length; k++) bag.push(more[k]);
-    }
-    if (ban < 0 || bag[i] !== ban) break;
-    i++;
-  }
-  if (i === 0) return;
-  const color = bag.splice(i, 1)[0];
-  const skipped = bag.splice(0, i);
-  for (let k = 0; k < skipped.length; k++) {
-    const at = Math.floor(Math.random() * (bag.length + 1));
-    bag.splice(at, 0, skipped[k]);
-  }
-  bag.unshift(color);
+function takeStock(p) {
   topUp(p);
+  return state.stock[p].shift();
+}
+
+function dealHand(p) {
+  while (state.bags[p].length < HAND) state.bags[p].push(takeStock(p));
 }
 
 function slotsOf(row) {
@@ -126,6 +120,7 @@ function findMatches() {
   const hit = new Set();
   const cross = new Set();
   const rowLines = [];
+  const groups = [];
   const slotRows = state.rows.map(slotsOf);
   function note(keys) {
     for (let n = 0; n < keys.length; n++) hit.add(keys[n]);
@@ -144,6 +139,7 @@ function findMatches() {
         for (let k = i; k < j; k++) keys.push(r + ":" + k);
         note(keys);
         rowLines.push({ r: r, keys: keys });
+        groups.push({ len: j - i, keys: keys });
       }
       i = j;
     }
@@ -156,33 +152,36 @@ function findMatches() {
     }
     return -1;
   }
+  const dirs = [0, 1, -1, 2, -2];
   for (let r = 0; r < ROWS; r++) {
     const cells = state.rows[r].cells;
     const slots = slotRows[r];
     for (let i = 0; i < cells.length; i++) {
       const col = cells[i].color;
       const slot = slots[i];
-      const dirs = [0, 1, -1, 2, -2];
       for (let d = 0; d < dirs.length; d++) {
-        if (r + MATCH > ROWS) continue;
         const dir = dirs[d];
+        if (r > 0 && at(r - 1, slot - dir, col) >= 0) continue;
         const idx = [i];
-        let ok = true;
-        for (let s = 1; s < MATCH; s++) {
+        let s = 1;
+        while (r + s < ROWS) {
           const k = at(r + s, slot + dir * s, col);
-          if (k < 0) { ok = false; break; }
+          if (k < 0) break;
           idx.push(k);
+          s++;
         }
-        if (!ok) continue;
+        if (idx.length < MATCH) continue;
         const keys = [];
-        for (let s = 0; s < MATCH; s++) keys.push((r + s) + ":" + idx[s]);
+        for (let n = 0; n < idx.length; n++) keys.push((r + n) + ":" + idx[n]);
         note(keys);
-        for (let s = 0; s < keys.length; s++) cross.add(keys[s]);
+        for (let n = 0; n < keys.length; n++) cross.add(keys[n]);
+        groups.push({ len: idx.length, keys: keys });
       }
     }
   }
   state.rowLines = rowLines;
   state.crossHits = cross;
+  state.matchGroups = groups;
   return hit;
 }
 
@@ -201,6 +200,33 @@ function edgeLoss() {
 
 function slotX(slot) { return state.wellX + slot * state.half; }
 function rowY(r) { return state.boardTop + (r + 0.5) * state.pitch; }
+
+function queueSlot(p, i) {
+  const r = state.discR;
+  const n = Math.max(state.bags[p].length, i + 1);
+  const gap = Math.min(state.pitch * 0.9, (state.pitch * ROWS * 0.42) / Math.max(1, n));
+  const pad = state.pitch * 0.22;
+  const x = p === 0 ? state.boardLeft - r - pad : state.boardRight + r + pad;
+  const nextY = state.boardTop + state.pitch * ROWS * 0.5;
+  return { x: x, y: nextY - i * gap };
+}
+
+function layoutAwards() {
+  const n = state.awards.length;
+  const small = Math.max(13, state.h * 0.04);
+  const y = Math.max(state.discR, state.boardTop * 0.55);
+  for (let i = 0; i < n; i++) {
+    const a = state.awards[i];
+    if (a.bump) continue;
+    a.tx = state.wellX + (i - (n - 1) * 0.5) * state.discR * 2.15;
+    a.ty = y + small * 0.95;
+    if (!a.placed) {
+      a.x = a.tx;
+      a.y = a.ty - state.discR;
+      a.placed = 1;
+    }
+  }
+}
 
 function layoutTargets() {
   for (let r = 0; r < ROWS; r++) {
@@ -242,33 +268,16 @@ function finishPops() {
   const cross = state.crossHits || new Set();
   const add = [];
   for (let r = 0; r < ROWS; r++) add.push(0);
-  function ours(bal, slot) {
-    if (me === 0) return slot <= bal;
-    return slot >= bal;
-  }
   if (state.rowLines) {
-    for (let n = 0; n < state.rowLines.length; n++) {
-      const line = state.rowLines[n];
-      const row = state.rows[line.r];
-      const slots = slotsOf(row);
-      const bal = row.lw - row.rw;
-      let pay = false;
-      for (let k = 0; k < line.keys.length; k++) {
-        const i = Number(line.keys[k].split(":")[1]);
-        if (ours(bal, slots[i])) pay = true;
-      }
-      if (pay) add[line.r]++;
-    }
+    for (let n = 0; n < state.rowLines.length; n++) add[state.rowLines[n].r]++;
   }
   for (let r = 0; r < ROWS; r++) {
     const row = state.rows[r];
-    const slots = slotsOf(row);
-    const bal = row.lw - row.rw;
     const keep = [];
     for (let i = 0; i < row.cells.length; i++) {
       const c = row.cells[i];
       if (!c.pop) { keep.push(c); continue; }
-      if (cross.has(r + ":" + i) && ours(bal, slots[i])) add[r]++;
+      if (cross.has(r + ":" + i)) add[r]++;
     }
     row.cells = keep;
   }
@@ -281,17 +290,22 @@ function finishPops() {
 
 function newGame() {
   state.rows = freshRows();
-  state.bags = [colorPackOfSets(2), colorPackOfSets(2)];
+  state.stock = [colorPackOfSets(2), colorPackOfSets(2)];
+  state.bags = [[], []];
   state.boardBag = [];
   state.turn = Math.round(Math.random());
-  state.shotsLeft = SHOTS;
-  settleFront(1 - state.turn, state.bags[state.turn][0]);
+  dealHand(0);
+  dealHand(1);
   state.phase = "idle";
   state.phaseT = 0;
-  state.chain = 0;
-  state.chainT = 0;
+  state.matchCount = 0;
+  state.comboT = 0;
+  state.bigText = "";
+  state.bigT = 0;
+  state.awards = [];
   state.loser = -1;
-  state.shot = null;
+  state.flyers = [];
+  state.pending = [];
   state.mode = "play";
   for (let n = 0; n < 40; n++) {
     const dealt = [];
@@ -333,6 +347,20 @@ function requestPageFullscreen() {
   } catch (err) {}
 }
 
+function parkPending() {
+  const used = [];
+  for (let r = 0; r < ROWS; r++) used.push(0);
+  for (let i = 0; i < state.pending.length; i++) {
+    const shot = state.pending[i];
+    const stack = used[shot.row];
+    used[shot.row] = stack + 1;
+    shot.cell.x = shot.side === 0 ? state.boardLeft - state.discR * 0.35 : state.boardRight + state.discR * 0.35;
+    shot.cell.y = state.boardTop + shot.row * state.pitch - stack * state.discR * 1.65;
+    shot.cell.tx = shot.cell.x;
+    shot.cell.ty = shot.cell.y;
+  }
+}
+
 function resize() {
   const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
   const viewW = window.innerWidth;
@@ -361,11 +389,14 @@ function resize() {
   state.boardRight = state.wellX + (END + 0.5) * state.half;
   if (state.mode !== "title") {
     layoutTargets();
-    if (state.phase !== "settle" && state.phase !== "pop") snapCells();
-    if (state.shot) {
-      state.shot.cell.y = rowY(state.shot.row);
-      state.shot.cell.tx = contactX(state.shot.row, state.shot.side);
+    if (state.phase !== "settle" && state.phase !== "pop" && state.phase !== "award") snapCells();
+    for (let i = 0; i < state.flyers.length; i++) {
+      const shot = state.flyers[i];
+      shot.cell.y = rowY(shot.row);
+      shot.cell.tx = contactX(shot.row, shot.side);
     }
+    parkPending();
+    layoutAwards();
   }
 }
 
@@ -388,35 +419,38 @@ function contactX(row, side) {
 }
 
 function shoot(row) {
-  if (state.mode !== "play" || state.phase !== "idle") return;
+  if (state.mode !== "play") return;
   if (row < 0 || row >= ROWS) return;
   const p = state.turn;
+  if (!state.bags[p].length) return;
+  if (state.phase === "pop") {
+    const color = state.bags[p].shift();
+    const cell = makeCell(color);
+    state.pending.push({ cell: cell, row: row, side: p, t: 0 });
+    parkPending();
+    return;
+  }
+  if (state.phase === "idle" || state.phase === "award") {
+    state.matchCount = 0;
+    state.comboT = 0;
+    state.bigText = "";
+    state.bigT = 0;
+  }
   const color = state.bags[p].shift();
-  topUp(p);
-  settleFront(1 - p, color);
   const cell = makeCell(color);
   cell.x = slotX(p === 0 ? -END - 2 : END + 2);
   cell.y = rowY(row);
   cell.tx = contactX(row, p);
   cell.ty = cell.y;
   cell.vx = p === 0 ? state.pitch * 9 : -state.pitch * 9;
-  state.shot = { cell: cell, row: row, side: p };
-  state.phase = "fly";
-  state.phaseT = 0;
-  state.chain = 0;
+  state.flyers.push({ cell: cell, row: row, side: p, t: 0 });
+  if (state.phase !== "settle" && state.phase !== "award") {
+    state.phase = "fly";
+    state.phaseT = 0;
+  }
 }
 
-function afterSettle() {
-  snapCells();
-  const hit = findMatches();
-  if (hit.size) {
-    markPops(hit);
-    state.chain++;
-    state.chainT = 1.1;
-    state.phase = "pop";
-    state.phaseT = 0;
-    return;
-  }
+function closeTurn() {
   const loss = edgeLoss();
   if (loss.left || loss.right) {
     state.mode = "over";
@@ -424,18 +458,68 @@ function afterSettle() {
     state.loser = loss.left && loss.right ? 2 : (loss.left ? 0 : 1);
     return;
   }
-  state.shotsLeft--;
-  if (state.shotsLeft <= 0) {
+  if (!state.bags[state.turn].length) {
     fillEmptyRows();
+    dealHand(state.turn);
     state.turn = 1 - state.turn;
-    state.shotsLeft = SHOTS;
+    state.matchCount = 0;
+    state.comboT = 0;
+    state.bigText = "";
+    state.bigT = 0;
   }
   state.phase = "idle";
 }
 
+function startAwardBump() {
+  const p = state.turn;
+  const base = state.bags[p].length;
+  for (let i = 0; i < state.awards.length; i++) {
+    const slot = queueSlot(p, base + i);
+    const a = state.awards[i];
+    a.tx = slot.x;
+    a.ty = slot.y;
+    a.bump = 1;
+  }
+  state.phase = "award";
+  state.phaseT = 0;
+}
+
+function afterSettle() {
+  snapCells();
+  const hit = findMatches();
+  if (hit.size) {
+    markPops(hit);
+    const groups = state.matchGroups || [];
+    const bigs = [];
+    for (let g = 0; g < groups.length; g++) {
+      state.matchCount++;
+      if (state.matchCount >= 2) {
+        state.awards.push({ color: takeStock(state.turn), x: 0, y: 0, tx: 0, ty: 0, bump: 0, placed: 0 });
+        state.comboT = 1.8;
+      }
+      if (groups[g].len > MATCH) {
+        state.awards.push({ color: takeStock(state.turn), x: 0, y: 0, tx: 0, ty: 0, bump: 0, placed: 0 });
+        bigs.push("BIG " + groups[g].len);
+        state.bigT = 1.8;
+      }
+    }
+    if (bigs.length) state.bigText = bigs.join("  ");
+    layoutAwards();
+    state.phase = "pop";
+    state.phaseT = 0;
+    return;
+  }
+  if (state.awards.length) {
+    startAwardBump();
+    return;
+  }
+  closeTurn();
+}
+
 function update(dt) {
   if (state.mode === "title") return;
-  if (state.chainT > 0) state.chainT -= dt;
+  if (state.comboT > 0) state.comboT -= dt;
+  if (state.bigT > 0) state.bigT -= dt;
   const kBal = 78;
   const dampBal = 9.5;
   for (let r = 0; r < ROWS; r++) {
@@ -448,31 +532,45 @@ function update(dt) {
       row.bvx = 0;
     }
   }
+  if (state.awards.length) {
+    for (let i = 0; i < state.awards.length; i++) {
+      const a = state.awards[i];
+      a.x += (a.tx - a.x) * Math.min(1, dt * 10);
+      a.y += (a.ty - a.y) * Math.min(1, dt * 10);
+    }
+  }
   if (state.mode === "over") return;
   state.phaseT += dt;
-  if (state.phase === "fly") {
-    const shot = state.shot;
-    const c = shot.cell;
-    c.tx = contactX(shot.row, shot.side);
-    c.ty = rowY(shot.row);
-    c.vx += ((c.tx - c.x) * 70 - c.vx * 8) * dt;
-    c.x += c.vx * dt;
-    c.y += (c.ty - c.y) * Math.min(1, dt * 14);
-    const arrived = shot.side === 0 ? c.x >= c.tx - 1 : c.x <= c.tx + 1;
-    if (arrived || state.phaseT > 0.7) {
+  if (state.phase !== "pop") {
+    let arrived = false;
+    for (let i = state.flyers.length - 1; i >= 0; i--) {
+      const shot = state.flyers[i];
+      const c = shot.cell;
+      shot.t += dt;
+      c.tx = contactX(shot.row, shot.side);
+      c.ty = rowY(shot.row);
+      c.vx += ((c.tx - c.x) * 70 - c.vx * 8) * dt;
+      c.x += c.vx * dt;
+      c.y += (c.ty - c.y) * Math.min(1, dt * 14);
+      const home = shot.side === 0 ? c.x >= c.tx - 1 : c.x <= c.tx + 1;
+      if (!home && shot.t <= 0.7) continue;
       c.x = c.tx;
       c.vx = shot.side === 0 ? state.pitch * 4 : -state.pitch * 4;
       if (shot.side === 0) state.rows[shot.row].cells.unshift(c);
       else state.rows[shot.row].cells.push(c);
-      state.shot = null;
-      layoutTargets();
-      state.phase = "settle";
-      state.phaseT = 0;
+      state.flyers.splice(i, 1);
+      arrived = true;
     }
-    return;
+    if (arrived) {
+      layoutTargets();
+      if (state.phase !== "award") {
+        state.phase = "settle";
+        state.phaseT = 0;
+      }
+    }
   }
   if (state.phase === "settle") {
-    let calm = true;
+    let calm = state.flyers.length === 0 && state.pending.length === 0;
     const k = 78;
     const damp = 9.5;
     for (let r = 0; r < ROWS; r++) {
@@ -487,7 +585,7 @@ function update(dt) {
         if (Math.abs(c.tx - c.x) > 1.4 || Math.abs(c.vx) > 36) calm = false;
       }
     }
-    if ((calm && state.phaseT >= SETTLE_MIN) || state.phaseT >= SETTLE_MAX) afterSettle();
+    if ((calm && state.phaseT >= SETTLE_MIN) || (state.flyers.length === 0 && state.pending.length === 0 && state.phaseT >= SETTLE_MAX)) afterSettle();
     return;
   }
   if (state.phase === "pop") {
@@ -501,8 +599,36 @@ function update(dt) {
     if (t >= 1) {
       finishPops();
       layoutTargets();
+      for (let i = 0; i < state.pending.length; i++) {
+        const shot = state.pending[i];
+        const c = shot.cell;
+        c.tx = contactX(shot.row, shot.side);
+        c.ty = rowY(shot.row);
+        c.vx = shot.side === 0 ? state.pitch * 9 : -state.pitch * 9;
+        shot.t = 0;
+        state.flyers.push(shot);
+      }
+      state.pending = [];
       state.phase = "settle";
       state.phaseT = 0;
+    }
+    return;
+  }
+  if (state.phase === "award") {
+    let home = true;
+    for (let i = 0; i < state.awards.length; i++) {
+      const a = state.awards[i];
+      if (Math.abs(a.tx - a.x) > 2 || Math.abs(a.ty - a.y) > 2) home = false;
+    }
+    if (home || state.phaseT > 0.45) {
+      for (let i = 0; i < state.awards.length; i++) state.bags[state.turn].push(state.awards[i].color);
+      state.awards = [];
+      if (state.flyers.length) {
+        state.phase = "settle";
+        state.phaseT = 0;
+        return;
+      }
+      closeTurn();
     }
   }
 }
@@ -540,18 +666,13 @@ function drawDisc(x, y, r, ci, alpha, sc, shine) {
 
 function drawQueue(p) {
   const bag = state.bags[p];
-  const mine = state.mode === "play" && state.turn === p && state.phase === "idle";
+  const mine = state.mode === "play" && state.turn === p;
   const r = state.discR;
-  const gap = state.pitch * 0.9;
-  const pad = state.pitch * 0.22;
-  const x = p === 0 ? state.boardLeft - r - pad : state.boardRight + r + pad;
-  const nextY = state.boardTop + state.pitch * ROWS * 0.5;
-  const n = QLEN;
-  for (let i = 0; i < n; i++) {
-    const y = nextY - i * gap;
+  for (let i = 0; i < bag.length; i++) {
+    const slot = queueSlot(p, i);
     const next = i === 0;
     const sc = next && mine ? 1.08 : 0.68;
-    drawDisc(x, y, r, bag[i], 1, sc, next);
+    drawDisc(slot.x, slot.y, r, bag[i], 1, sc, next);
   }
 }
 
@@ -664,39 +785,27 @@ function draw() {
       drawDisc(c.x, c.y, state.discR, c.color, 1, c.sc == null ? 1 : c.sc, true);
     }
   }
-  if (state.shot) {
-    const c = state.shot.cell;
+  for (let i = 0; i < state.flyers.length; i++) {
+    const c = state.flyers[i].cell;
+    drawDisc(c.x, c.y, state.discR, c.color, 1, 1, true);
+  }
+  for (let i = 0; i < state.pending.length; i++) {
+    const c = state.pending[i].cell;
     drawDisc(c.x, c.y, state.discR, c.color, 1, 1, true);
   }
 
   ctx.save();
   ctx.lineWidth = 3;
   ctx.strokeStyle = PCOL[0];
-  ctx.globalAlpha = state.turn === 0 && state.phase === "idle" ? 0.95 : 0.28;
+  ctx.globalAlpha = state.turn === 0 && state.mode === "play" ? 0.95 : 0.28;
   ctx.strokeRect(state.boardLeft - 2, state.boardTop, 4, state.pitch * ROWS);
   ctx.strokeStyle = PCOL[1];
-  ctx.globalAlpha = state.turn === 1 && state.phase === "idle" ? 0.95 : 0.28;
+  ctx.globalAlpha = state.turn === 1 && state.mode === "play" ? 0.95 : 0.28;
   ctx.strokeRect(state.boardRight - 2, state.boardTop, 4, state.pitch * ROWS);
   ctx.restore();
 
   drawQueue(0);
   drawQueue(1);
-
-  if (state.mode === "play") {
-    ctx.save();
-    const pip = Math.max(3.5, state.pitch * 0.09);
-    const pipGap = pip * 3.1;
-    const pipX = state.turn === 0 ? state.boardLeft + pip * 2.2 : state.boardRight - pip * 2.2;
-    const pipY = state.boardTop - pip * 2.4;
-    for (let i = 0; i < SHOTS; i++) {
-      ctx.beginPath();
-      ctx.arc(pipX + (i - (SHOTS - 1) * 0.5) * pipGap, pipY, pip, 0, Math.PI * 2);
-      ctx.fillStyle = PCOL[state.turn];
-      ctx.globalAlpha = i < state.shotsLeft ? 0.92 : 0.2;
-      ctx.fill();
-    }
-    ctx.restore();
-  }
 
   ctx.save();
   ctx.textAlign = "center";
@@ -709,10 +818,18 @@ function draw() {
     ctx.fillText(msg, state.w * 0.5, state.boardTop - small * 0.9);
     ctx.font = "400 " + (small * 0.72) + "px ui-sans-serif, system-ui, sans-serif";
     ctx.fillText("tap to restart", state.w * 0.5, state.boardTop + state.pitch * ROWS + small);
-  } else if (state.chainT > 0 && state.chain > 1) {
-    ctx.fillText("CHAIN " + state.chain, state.w * 0.5, state.boardTop - small * 0.7);
+  } else {
+    const showCombo = state.matchCount >= 2 && (state.comboT > 0 || state.awards.length || state.phase === "pop" || state.phase === "award");
+    const showBig = state.bigText && (state.bigT > 0 || state.awards.length || state.phase === "pop" || state.phase === "award");
+    const labelY = Math.max(small * 0.7, state.boardTop * 0.28);
+    if (showCombo) ctx.fillText("COMBO " + state.matchCount, state.w * 0.5, labelY);
+    if (showBig) ctx.fillText(state.bigText, state.w * 0.5, labelY + (showCombo ? small * 0.95 : 0));
   }
   ctx.restore();
+  for (let i = 0; i < state.awards.length; i++) {
+    const a = state.awards[i];
+    drawDisc(a.x, a.y, state.discR, a.color, 1, a.bump ? 0.86 : 1, true);
+  }
 }
 
 function onPoint(x, y) {
@@ -726,7 +843,6 @@ function onPoint(x, y) {
     newGame();
     return;
   }
-  if (state.phase !== "idle") return;
   const row = rowAt(y);
   if (row < 0) return;
   if (state.turn === 0 && x >= state.wellX) return;
@@ -765,4 +881,3 @@ function frame(now) {
 bindInput();
 resize();
 requestAnimationFrame(frame);
-
