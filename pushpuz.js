@@ -8,15 +8,13 @@
   between shots. Fire any time a disc is in the hand. Shots during a pop
   wait at the top of the chosen row and launch when that pop ends.
   Match check waits until every fired disc has settled.
-  The first match of a resolve pays nothing. A later match, or a big, is a
-  combo and awards one heavy. Rings are the extra weight: 1, or length-2
-  on a big. A match that contains a heavy awards another one-ring heavy.
-  A heavy adds its rings to whichever side of the mark it sits on, and
-  swings if a pop carries the mark past it. Awards sit on the top rail
-  until the cascade finishes, then bump into the hand. An empty row takes
-  two discs at end of turn and does not match. Even rows can grow a bud
-  on the mark; a disc landing there smashes it, otherwise it inserts next
-  turn. A visible disc on your end slot loses. Animation is not the grid.
+  No popping yet. After a settle, same-color discs group when
+  2*row^2 + slot^2 <= 6. That caps at 1, and 1 is one row by two slots.
+  A link draws behind the discs in the outline color. A pop, when it
+  returns, pushes the balance mark one slot on that row per popped disc.
+  An empty row takes
+  two discs at end of turn and does not match. A visible disc on your end
+  slot loses. Animation is not the grid.
 */
 
 const ROWS = 6;
@@ -45,7 +43,7 @@ const state = {
   w: 0, h: 0, viewW: 0, viewH: 0, dpr: 1, portrait: false,
   mode: "title", phase: "idle", phaseT: 0, turn: 0,
   rows: [], bags: [[], []], stock: [[], []], boardBag: [],
-  matchCount: 0, comboT: 0, bigText: "", bigT: 0, awards: [], bud: null,
+  matchCount: 0, comboT: 0, bigText: "", bigT: 0, awards: [],
   loser: -1, last: 0, flyers: [], pending: [],
   boardLeft: 0, boardRight: 0, boardTop: 0, pitch: 0, half: 0, discR: 0, wellX: 0
 };
@@ -85,8 +83,8 @@ function mixHex(a, b, t) {
   return "rgb(" + r + "," + g + "," + bl + ")";
 }
 
-function makeCell(color, rings) {
-  return { color: color, rings: rings || 0, moved: 0, x: 0, y: 0, vx: 0, vy: 0, tx: 0, ty: 0, pop: 0, popSide: -1, sc: 1 };
+function makeCell(color) {
+  return { color: color, moved: 0, x: 0, y: 0, vx: 0, vy: 0, tx: 0, ty: 0, pop: 0, popSide: -1, sc: 1 };
 }
 
 function freshRows() {
@@ -107,29 +105,7 @@ function takeStock(p) {
 }
 
 function dealHand(p) {
-  while (state.bags[p].length < HAND) state.bags[p].push({ color: takeStock(p), rings: 0 });
-}
-
-function grantHeavy(rings) {
-  state.awards.push({ color: takeStock(state.turn), rings: rings, x: 0, y: 0, tx: 0, ty: 0, bump: 0, placed: 0 });
-}
-
-function smashBud(row) {
-  if (state.bud && state.bud.row === row) state.bud = null;
-}
-
-function heavyBias(row) {
-  const slots = slotsOf(row);
-  const mark = row.bal;
-  let left = 0;
-  let right = 0;
-  for (let i = 0; i < row.cells.length; i++) {
-    const rings = row.cells[i].rings || 0;
-    if (!rings) continue;
-    if (slots[i] < mark) left += rings;
-    else if (slots[i] > mark) right += rings;
-  }
-  return left - right;
+  while (state.bags[p].length < HAND) state.bags[p].push({ color: takeStock(p) });
 }
 
 function slotsOf(row) {
@@ -301,32 +277,68 @@ function markPops(hit) {
 
 function finishPops() {
   const me = state.turn;
-  const cross = state.crossHits || new Set();
-  const add = [];
-  for (let r = 0; r < ROWS; r++) add.push(0);
-  if (state.rowLines) {
-    for (let n = 0; n < state.rowLines.length; n++) add[state.rowLines[n].r]++;
-  }
   for (let r = 0; r < ROWS; r++) {
     const row = state.rows[r];
     const keep = [];
-    const before = row.cells.length;
+    let popped = 0;
     for (let i = 0; i < row.cells.length; i++) {
       const c = row.cells[i];
       if (!c.pop) { keep.push(c); continue; }
-      if (cross.has(r + ":" + i)) add[r]++;
+      popped++;
     }
     row.cells = keep;
-    if (keep.length !== before) {
-      for (let i = 0; i < keep.length; i++) keep[i].moved = 1;
+    if (!popped) continue;
+    if (me === 0) row.lw += popped;
+    else row.rw += popped;
+    for (let i = 0; i < keep.length; i++) keep[i].moved = 1;
+  }
+}
+
+function findColorGroups() {
+  const span = [];
+  for (let r = 0; r < ROWS; r++) {
+    const slots = slotsOf(state.rows[r]);
+    const cells = state.rows[r].cells;
+    for (let i = 0; i < cells.length; i++) {
+      span.push({ r: r, i: i, cell: cells[i], slot: slots[i], color: cells[i].color });
     }
   }
-  for (let r = 0; r < ROWS; r++) {
-    if (!add[r]) continue;
-    if (me === 0) state.rows[r].lw += add[r];
-    else state.rows[r].rw += add[r];
-    for (let i = 0; i < state.rows[r].cells.length; i++) state.rows[r].cells[i].moved = 1;
+  const parent = [];
+  for (let n = 0; n < span.length; n++) parent.push(n);
+  function find(x) {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
+    }
+    return x;
   }
+  const links = [];
+  for (let a = 0; a < span.length; a++) {
+    for (let b = a + 1; b < span.length; b++) {
+      if (span[a].color !== span[b].color) continue;
+      const dr = span[a].r - span[b].r;
+      const ds = span[a].slot - span[b].slot;
+      if (2 * dr * dr + ds * ds > 6) continue;
+      links.push({ a: span[a], b: span[b], color: span[a].color });
+      const pa = find(a);
+      const pb = find(b);
+      if (pa !== pb) parent[pa] = pb;
+    }
+  }
+  const groups = [];
+  const at = {};
+  for (let n = 0; n < span.length; n++) {
+    const p = find(n);
+    let g = at[p];
+    if (!g) {
+      g = { color: span[n].color, discs: [] };
+      at[p] = g;
+      groups.push(g);
+    }
+    g.discs.push(span[n]);
+  }
+  state.colorLinks = links;
+  state.colorGroups = groups;
 }
 
 function newGame() {
@@ -344,10 +356,11 @@ function newGame() {
   state.bigText = "";
   state.bigT = 0;
   state.awards = [];
-  state.bud = null;
   state.loser = -1;
   state.flyers = [];
   state.pending = [];
+  state.colorLinks = [];
+  state.colorGroups = [];
   state.mode = "play";
   for (let n = 0; n < 40; n++) {
     const dealt = [];
@@ -363,16 +376,16 @@ function newGame() {
   }
   layoutTargets();
   snapCells();
+  findColorGroups();
 }
 
 function fillEmptyRows() {
   for (let r = 0; r < ROWS; r++) {
     const row = state.rows[r];
     if (row.cells.length) continue;
-    smashBud(r);
     const center = row.lw - row.rw;
     for (let n = 0; n < 2; n++) {
-      const cell = makeCell(takeBoardColor(), 0);
+      const cell = makeCell(takeBoardColor());
       const slot = center + (n === 0 ? -1 : 1);
       cell.x = slotX(slot);
       cell.tx = cell.x;
@@ -385,34 +398,6 @@ function fillEmptyRows() {
 
 function growBoard() {
   fillEmptyRows();
-  if (state.bud) {
-    const r = state.bud.row;
-    const row = state.rows[r];
-    if (row.cells.length && row.cells.length % 2 === 0) {
-      const cell = makeCell(state.bud.color, 0);
-      const at = row.cells.length / 2;
-      row.cells.splice(at, 0, cell);
-      cell.x = state.wellX + row.bal * state.half;
-      cell.tx = cell.x;
-      cell.y = rowY(r);
-      cell.ty = cell.y;
-    }
-    state.bud = null;
-  }
-  let best = -1;
-  let bestScore = 0;
-  for (let r = 0; r < ROWS; r++) {
-    const row = state.rows[r];
-    if (!row.cells.length || row.cells.length % 2) continue;
-    const slots = slotsOf(row);
-    let score = 0;
-    for (let i = 0; i < slots.length; i++) score += Math.abs(slots[i]) + 1;
-    if (best < 0 || score < bestScore) {
-      best = r;
-      bestScore = score;
-    }
-  }
-  if (best >= 0) state.bud = { row: best, color: takeBoardColor() };
   layoutTargets();
   snapCells();
 }
@@ -503,7 +488,7 @@ function shoot(row) {
   if (!state.bags[p].length) return;
   if (state.phase === "pop") {
     const disc = state.bags[p].shift();
-    const cell = makeCell(disc.color, disc.rings);
+    const cell = makeCell(disc.color);
     state.pending.push({ cell: cell, row: row, side: p, t: 0 });
     parkPending();
     return;
@@ -515,7 +500,7 @@ function shoot(row) {
     state.bigT = 0;
   }
   const disc = state.bags[p].shift();
-  const cell = makeCell(disc.color, disc.rings);
+  const cell = makeCell(disc.color);
   cell.x = slotX(p === 0 ? -END - 2 : END + 2);
   cell.y = rowY(row);
   cell.tx = contactX(row, p);
@@ -564,41 +549,7 @@ function startAwardBump() {
 
 function afterSettle() {
   snapCells();
-  const hit = findMatches(true);
-  if (hit.size) {
-    markPops(hit);
-    const groups = state.matchGroups || [];
-    const bigs = [];
-    for (let g = 0; g < groups.length; g++) {
-      state.matchCount++;
-      const group = groups[g];
-      const big = group.len > MATCH;
-      if (state.matchCount >= 2 || big) {
-        grantHeavy(big ? group.len - 2 : 1);
-        if (state.matchCount >= 2) state.comboT = 1.8;
-      }
-      if (big) {
-        bigs.push("BIG " + group.len);
-        state.bigT = 1.8;
-      }
-      let held = false;
-      for (let k = 0; k < group.keys.length; k++) {
-        const part = group.keys[k].split(":");
-        const cell = state.rows[Number(part[0])].cells[Number(part[1])];
-        if (cell && cell.rings) held = true;
-      }
-      if (held) grantHeavy(1);
-    }
-    if (bigs.length) state.bigText = bigs.join("  ");
-    layoutAwards();
-    state.phase = "pop";
-    state.phaseT = 0;
-    return;
-  }
-  if (state.awards.length) {
-    startAwardBump();
-    return;
-  }
+  findColorGroups();
   for (let r = 0; r < ROWS; r++) {
     const cells = state.rows[r].cells;
     for (let i = 0; i < cells.length; i++) cells[i].moved = 0;
@@ -614,7 +565,7 @@ function update(dt) {
   const dampBal = 9.5;
   for (let r = 0; r < ROWS; r++) {
     const row = state.rows[r];
-    const target = row.lw - row.rw + heavyBias(row);
+    const target = row.lw - row.rw;
     row.bvx += ((target - row.bal) * kBal - row.bvx * dampBal) * dt;
     row.bal += row.bvx * dt;
     if (Math.abs(target - row.bal) < 0.02 && Math.abs(row.bvx) < 0.4) {
@@ -651,7 +602,6 @@ function update(dt) {
       c.moved = 1;
       const packed = state.rows[shot.row].cells;
       for (let n = 0; n < packed.length; n++) packed[n].moved = 1;
-      smashBud(shot.row);
       state.flyers.splice(i, 1);
       arrived = true;
     }
@@ -717,7 +667,7 @@ function update(dt) {
     if (home || state.phaseT > 0.45) {
       for (let i = 0; i < state.awards.length; i++) {
         const a = state.awards[i];
-        state.bags[state.turn].push({ color: a.color, rings: a.rings || 0 });
+        state.bags[state.turn].push({ color: a.color });
       }
       state.awards = [];
       if (state.flyers.length) {
@@ -730,20 +680,40 @@ function update(dt) {
   }
 }
 
-function drawDisc(x, y, r, ci, alpha, sc, shine, rings, halo) {
+function drawColorLinks() {
+  const links = state.colorLinks || [];
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.lineWidth = Math.max(2.4, state.discR * 0.34);
+  for (let n = 0; n < links.length; n++) {
+    const link = links[n];
+    const ca = link.a.cell;
+    const cb = link.b.cell;
+    if (!ca || !cb) continue;
+    const col = COLS[link.color];
+    ctx.strokeStyle = mixHex(col.fill, col.hi, 0.5);
+    ctx.beginPath();
+    ctx.moveTo(ca.x, ca.y);
+    ctx.lineTo(cb.x, cb.y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawDisc(x, y, r, ci, alpha, sc, shine) {
   if (sc <= 0.02 || alpha <= 0.02) return;
   const rr = r * sc;
   const c = COLS[ci];
   const edge = mixHex(c.fill, c.hi, 0.5);
   const outline = Math.max(1.6, rr * 0.11);
-  const shade = halo == null ? outline + 3 : halo;
   ctx.save();
-  ctx.globalAlpha = alpha;
   ctx.translate(x, y);
+  ctx.globalAlpha = alpha * 0.5;
   ctx.beginPath();
-  ctx.arc(0, 0, rr + shade, 0, Math.PI * 2);
+  ctx.arc(0, 0, rr * 1.1, 0, Math.PI * 2);
   ctx.fillStyle = "#000000";
   ctx.fill();
+  ctx.globalAlpha = alpha;
   ctx.beginPath();
   ctx.arc(0, 0, rr, 0, Math.PI * 2);
   ctx.fillStyle = c.fill;
@@ -751,14 +721,6 @@ function drawDisc(x, y, r, ci, alpha, sc, shine, rings, halo) {
   ctx.lineWidth = outline;
   ctx.strokeStyle = edge;
   ctx.stroke();
-  const nRings = rings || 0;
-  for (let n = 1; n <= nRings; n++) {
-    ctx.beginPath();
-    ctx.arc(0, 0, rr * Math.max(0.12, 0.42 - (n - 1) * 0.12), 0, Math.PI * 2);
-    ctx.strokeStyle = "rgba(255,255,255,0.9)";
-    ctx.lineWidth = Math.max(1.2, rr * 0.07);
-    ctx.stroke();
-  }
   if (shine) {
     ctx.beginPath();
     ctx.arc(0, 0, rr * 0.72, Math.PI * 1.08, Math.PI * 1.78);
@@ -778,7 +740,7 @@ function drawQueue(p) {
     const slot = queueSlot(p, i);
     const next = i === 0;
     const sc = next && mine ? 1.08 : 0.68;
-    drawDisc(slot.x, slot.y, r, bag[i].color, 1, sc, next, bag[i].rings);
+    drawDisc(slot.x, slot.y, r, bag[i].color, 1, sc, next);
   }
 }
 
@@ -886,18 +848,22 @@ function draw() {
       ctx.fillRect(state.boardRight - span, y - 2, span, 3);
     }
     ctx.restore();
+  }
+  drawColorLinks();
+  for (let r = 0; r < ROWS; r++) {
+    const row = state.rows[r];
     for (let i = 0; i < row.cells.length; i++) {
       const c = row.cells[i];
-      drawDisc(c.x, c.y, state.discR, c.color, 1, c.sc == null ? 1 : c.sc, true, c.rings);
+      drawDisc(c.x, c.y, state.discR, c.color, 1, c.sc == null ? 1 : c.sc, true);
     }
   }
   for (let i = 0; i < state.flyers.length; i++) {
     const c = state.flyers[i].cell;
-    drawDisc(c.x, c.y, state.discR, c.color, 1, 1, true, c.rings);
+    drawDisc(c.x, c.y, state.discR, c.color, 1, 1, true);
   }
   for (let i = 0; i < state.pending.length; i++) {
     const c = state.pending[i].cell;
-    drawDisc(c.x, c.y, state.discR, c.color, 1, 1, true, c.rings);
+    drawDisc(c.x, c.y, state.discR, c.color, 1, 1, true);
   }
 
   ctx.save();
@@ -912,15 +878,6 @@ function draw() {
 
   drawQueue(0);
   drawQueue(1);
-  if (state.bud) {
-    const row = state.rows[state.bud.row];
-    let x = state.wellX + row.bal * state.half;
-    if (x < state.boardLeft) x = state.boardLeft;
-    if (x > state.boardRight) x = state.boardRight;
-    const y = rowY(state.bud.row);
-    drawDisc(x, y, state.discR * 0.42, state.bud.color, 1, 1, false, 0, 1.2);
-  }
-
   ctx.save();
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -942,7 +899,7 @@ function draw() {
   ctx.restore();
   for (let i = 0; i < state.awards.length; i++) {
     const a = state.awards[i];
-    drawDisc(a.x, a.y, state.discR, a.color, 1, a.bump ? 0.86 : 1, true, a.rings);
+    drawDisc(a.x, a.y, state.discR, a.color, 1, a.bump ? 0.86 : 1, true);
   }
 }
 
