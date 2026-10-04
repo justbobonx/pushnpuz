@@ -1,22 +1,25 @@
 /*
   PUSH & PUZ
-  Seven rows on the long axis. Discs pack around a center well.
+  Six rows on the long axis. Discs pack around a center well.
   Odd count sits on the well. Even count straddles it.
-  Match-3 on a straight slot line: neighbors in a row, the same slot
-  across rows, or a diagonal stepping one or two slots per row.
+  Match-3 scans the whole board. A line pops if at least one disc is
+  active: the shot, a disc that shot pushed, or a disc a combo settle moved.
   Each turn deals a hand of two. The hand is the shot count. No refill
   between shots. Fire any time a disc is in the hand. Shots during a pop
   wait at the top of the chosen row and launch when that pop ends.
   Match check waits until every fired disc has settled.
-  The first match of a resolve pays nothing. Each later match in that
-  check, or in a settle after the first pop, is a combo and pays one disc.
-  A match longer than 3 is a big and pays one disc. Awards sit on the top
-  rail until the cascade finishes, then bump into the hand. Empty rows
-  refill at end of turn and do not match.
-  A visible disc on your end slot loses. Animation is not the grid.
+  The first match of a resolve pays nothing. A later match, or a big, is a
+  combo and awards one heavy. Rings are the extra weight: 1, or length-2
+  on a big. A match that contains a heavy awards another one-ring heavy.
+  A heavy adds its rings to whichever side of the mark it sits on, and
+  swings if a pop carries the mark past it. Awards sit on the top rail
+  until the cascade finishes, then bump into the hand. An empty row takes
+  two discs at end of turn and does not match. Even rows can grow a bud
+  on the mark; a disc landing there smashes it, otherwise it inserts next
+  turn. A visible disc on your end slot loses. Animation is not the grid.
 */
 
-const ROWS = 7;
+const ROWS = 6;
 const END = 15;
 const MATCH = 3;
 const HAND = 2;
@@ -42,7 +45,7 @@ const state = {
   w: 0, h: 0, viewW: 0, viewH: 0, dpr: 1, portrait: false,
   mode: "title", phase: "idle", phaseT: 0, turn: 0,
   rows: [], bags: [[], []], stock: [[], []], boardBag: [],
-  matchCount: 0, comboT: 0, bigText: "", bigT: 0, awards: [],
+  matchCount: 0, comboT: 0, bigText: "", bigT: 0, awards: [], bud: null,
   loser: -1, last: 0, flyers: [], pending: [],
   boardLeft: 0, boardRight: 0, boardTop: 0, pitch: 0, half: 0, discR: 0, wellX: 0
 };
@@ -82,8 +85,8 @@ function mixHex(a, b, t) {
   return "rgb(" + r + "," + g + "," + bl + ")";
 }
 
-function makeCell(color) {
-  return { color: color, x: 0, y: 0, vx: 0, vy: 0, tx: 0, ty: 0, pop: 0, popSide: -1, sc: 1 };
+function makeCell(color, rings) {
+  return { color: color, rings: rings || 0, moved: 0, x: 0, y: 0, vx: 0, vy: 0, tx: 0, ty: 0, pop: 0, popSide: -1, sc: 1 };
 }
 
 function freshRows() {
@@ -104,7 +107,29 @@ function takeStock(p) {
 }
 
 function dealHand(p) {
-  while (state.bags[p].length < HAND) state.bags[p].push(takeStock(p));
+  while (state.bags[p].length < HAND) state.bags[p].push({ color: takeStock(p), rings: 0 });
+}
+
+function grantHeavy(rings) {
+  state.awards.push({ color: takeStock(state.turn), rings: rings, x: 0, y: 0, tx: 0, ty: 0, bump: 0, placed: 0 });
+}
+
+function smashBud(row) {
+  if (state.bud && state.bud.row === row) state.bud = null;
+}
+
+function heavyBias(row) {
+  const slots = slotsOf(row);
+  const mark = row.bal;
+  let left = 0;
+  let right = 0;
+  for (let i = 0; i < row.cells.length; i++) {
+    const rings = row.cells[i].rings || 0;
+    if (!rings) continue;
+    if (slots[i] < mark) left += rings;
+    else if (slots[i] > mark) right += rings;
+  }
+  return left - right;
 }
 
 function slotsOf(row) {
@@ -116,7 +141,7 @@ function slotsOf(row) {
   return out;
 }
 
-function findMatches() {
+function findMatches(live) {
   const hit = new Set();
   const cross = new Set();
   const rowLines = [];
@@ -124,6 +149,14 @@ function findMatches() {
   const slotRows = state.rows.map(slotsOf);
   function note(keys) {
     for (let n = 0; n < keys.length; n++) hit.add(keys[n]);
+  }
+  function armed(keys) {
+    if (!live) return true;
+    for (let n = 0; n < keys.length; n++) {
+      const part = keys[n].split(":");
+      if (state.rows[Number(part[0])].cells[Number(part[1])].moved) return true;
+    }
+    return false;
   }
   for (let r = 0; r < ROWS; r++) {
     const cells = state.rows[r].cells;
@@ -137,9 +170,11 @@ function findMatches() {
       if (j - i >= MATCH) {
         const keys = [];
         for (let k = i; k < j; k++) keys.push(r + ":" + k);
-        note(keys);
-        rowLines.push({ r: r, keys: keys });
-        groups.push({ len: j - i, keys: keys });
+        if (armed(keys)) {
+          note(keys);
+          rowLines.push({ r: r, keys: keys });
+          groups.push({ len: j - i, keys: keys });
+        }
       }
       i = j;
     }
@@ -173,6 +208,7 @@ function findMatches() {
         if (idx.length < MATCH) continue;
         const keys = [];
         for (let n = 0; n < idx.length; n++) keys.push((r + n) + ":" + idx[n]);
+        if (!armed(keys)) continue;
         note(keys);
         for (let n = 0; n < keys.length; n++) cross.add(keys[n]);
         groups.push({ len: idx.length, keys: keys });
@@ -274,17 +310,22 @@ function finishPops() {
   for (let r = 0; r < ROWS; r++) {
     const row = state.rows[r];
     const keep = [];
+    const before = row.cells.length;
     for (let i = 0; i < row.cells.length; i++) {
       const c = row.cells[i];
       if (!c.pop) { keep.push(c); continue; }
       if (cross.has(r + ":" + i)) add[r]++;
     }
     row.cells = keep;
+    if (keep.length !== before) {
+      for (let i = 0; i < keep.length; i++) keep[i].moved = 1;
+    }
   }
   for (let r = 0; r < ROWS; r++) {
     if (!add[r]) continue;
     if (me === 0) state.rows[r].lw += add[r];
     else state.rows[r].rw += add[r];
+    for (let i = 0; i < state.rows[r].cells.length; i++) state.rows[r].cells[i].moved = 1;
   }
 }
 
@@ -303,6 +344,7 @@ function newGame() {
   state.bigText = "";
   state.bigT = 0;
   state.awards = [];
+  state.bud = null;
   state.loser = -1;
   state.flyers = [];
   state.pending = [];
@@ -327,14 +369,52 @@ function fillEmptyRows() {
   for (let r = 0; r < ROWS; r++) {
     const row = state.rows[r];
     if (row.cells.length) continue;
-    const cell = makeCell(takeBoardColor());
-    const slot = row.lw - row.rw;
-    cell.x = slotX(slot);
-    cell.tx = cell.x;
-    cell.y = rowY(r);
-    cell.ty = cell.y;
-    row.cells.push(cell);
+    smashBud(r);
+    const center = row.lw - row.rw;
+    for (let n = 0; n < 2; n++) {
+      const cell = makeCell(takeBoardColor(), 0);
+      const slot = center + (n === 0 ? -1 : 1);
+      cell.x = slotX(slot);
+      cell.tx = cell.x;
+      cell.y = rowY(r);
+      cell.ty = cell.y;
+      row.cells.push(cell);
+    }
   }
+}
+
+function growBoard() {
+  fillEmptyRows();
+  if (state.bud) {
+    const r = state.bud.row;
+    const row = state.rows[r];
+    if (row.cells.length && row.cells.length % 2 === 0) {
+      const cell = makeCell(state.bud.color, 0);
+      const at = row.cells.length / 2;
+      row.cells.splice(at, 0, cell);
+      cell.x = state.wellX + row.bal * state.half;
+      cell.tx = cell.x;
+      cell.y = rowY(r);
+      cell.ty = cell.y;
+    }
+    state.bud = null;
+  }
+  let best = -1;
+  let bestScore = 0;
+  for (let r = 0; r < ROWS; r++) {
+    const row = state.rows[r];
+    if (!row.cells.length || row.cells.length % 2) continue;
+    const slots = slotsOf(row);
+    let score = 0;
+    for (let i = 0; i < slots.length; i++) score += Math.abs(slots[i]) + 1;
+    if (best < 0 || score < bestScore) {
+      best = r;
+      bestScore = score;
+    }
+  }
+  if (best >= 0) state.bud = { row: best, color: takeBoardColor() };
+  layoutTargets();
+  snapCells();
 }
 
 function requestPageFullscreen() {
@@ -375,16 +455,14 @@ function resize() {
   state.portrait = viewH > viewW;
   state.w = Math.max(viewW, viewH);
   state.h = Math.min(viewW, viewH);
-  const availH = state.h * 0.86;
-  let pitch = availH / ROWS;
-  const gutter = pitch * 0.34 * 2 + pitch * 0.4;
-  const maxPitch = (state.w - gutter * 2) / (END + 0.5);
-  if (pitch > maxPitch) pitch = maxPitch;
-  state.pitch = pitch;
-  state.half = pitch * 0.5;
-  state.discR = pitch * 0.34;
+  const queuePad = 0.9;
+  const pitchH = state.h / ROWS;
+  const pitchW = state.w / (END + 0.5 + queuePad * 2);
+  state.pitch = Math.min(pitchH, pitchW);
+  state.half = state.pitch * 0.5;
+  state.discR = state.pitch * 0.34;
   state.wellX = state.w * 0.5;
-  state.boardTop = (state.h - pitch * ROWS) * 0.5;
+  state.boardTop = (state.h - state.pitch * ROWS) * 0.5;
   state.boardLeft = state.wellX - (END + 0.5) * state.half;
   state.boardRight = state.wellX + (END + 0.5) * state.half;
   if (state.mode !== "title") {
@@ -424,8 +502,8 @@ function shoot(row) {
   const p = state.turn;
   if (!state.bags[p].length) return;
   if (state.phase === "pop") {
-    const color = state.bags[p].shift();
-    const cell = makeCell(color);
+    const disc = state.bags[p].shift();
+    const cell = makeCell(disc.color, disc.rings);
     state.pending.push({ cell: cell, row: row, side: p, t: 0 });
     parkPending();
     return;
@@ -436,8 +514,8 @@ function shoot(row) {
     state.bigText = "";
     state.bigT = 0;
   }
-  const color = state.bags[p].shift();
-  const cell = makeCell(color);
+  const disc = state.bags[p].shift();
+  const cell = makeCell(disc.color, disc.rings);
   cell.x = slotX(p === 0 ? -END - 2 : END + 2);
   cell.y = rowY(row);
   cell.tx = contactX(row, p);
@@ -459,7 +537,7 @@ function closeTurn() {
     return;
   }
   if (!state.bags[state.turn].length) {
-    fillEmptyRows();
+    growBoard();
     dealHand(state.turn);
     state.turn = 1 - state.turn;
     state.matchCount = 0;
@@ -486,22 +564,30 @@ function startAwardBump() {
 
 function afterSettle() {
   snapCells();
-  const hit = findMatches();
+  const hit = findMatches(true);
   if (hit.size) {
     markPops(hit);
     const groups = state.matchGroups || [];
     const bigs = [];
     for (let g = 0; g < groups.length; g++) {
       state.matchCount++;
-      if (state.matchCount >= 2) {
-        state.awards.push({ color: takeStock(state.turn), x: 0, y: 0, tx: 0, ty: 0, bump: 0, placed: 0 });
-        state.comboT = 1.8;
+      const group = groups[g];
+      const big = group.len > MATCH;
+      if (state.matchCount >= 2 || big) {
+        grantHeavy(big ? group.len - 2 : 1);
+        if (state.matchCount >= 2) state.comboT = 1.8;
       }
-      if (groups[g].len > MATCH) {
-        state.awards.push({ color: takeStock(state.turn), x: 0, y: 0, tx: 0, ty: 0, bump: 0, placed: 0 });
-        bigs.push("BIG " + groups[g].len);
+      if (big) {
+        bigs.push("BIG " + group.len);
         state.bigT = 1.8;
       }
+      let held = false;
+      for (let k = 0; k < group.keys.length; k++) {
+        const part = group.keys[k].split(":");
+        const cell = state.rows[Number(part[0])].cells[Number(part[1])];
+        if (cell && cell.rings) held = true;
+      }
+      if (held) grantHeavy(1);
     }
     if (bigs.length) state.bigText = bigs.join("  ");
     layoutAwards();
@@ -512,6 +598,10 @@ function afterSettle() {
   if (state.awards.length) {
     startAwardBump();
     return;
+  }
+  for (let r = 0; r < ROWS; r++) {
+    const cells = state.rows[r].cells;
+    for (let i = 0; i < cells.length; i++) cells[i].moved = 0;
   }
   closeTurn();
 }
@@ -524,7 +614,7 @@ function update(dt) {
   const dampBal = 9.5;
   for (let r = 0; r < ROWS; r++) {
     const row = state.rows[r];
-    const target = row.lw - row.rw;
+    const target = row.lw - row.rw + heavyBias(row);
     row.bvx += ((target - row.bal) * kBal - row.bvx * dampBal) * dt;
     row.bal += row.bvx * dt;
     if (Math.abs(target - row.bal) < 0.02 && Math.abs(row.bvx) < 0.4) {
@@ -558,6 +648,10 @@ function update(dt) {
       c.vx = shot.side === 0 ? state.pitch * 4 : -state.pitch * 4;
       if (shot.side === 0) state.rows[shot.row].cells.unshift(c);
       else state.rows[shot.row].cells.push(c);
+      c.moved = 1;
+      const packed = state.rows[shot.row].cells;
+      for (let n = 0; n < packed.length; n++) packed[n].moved = 1;
+      smashBud(shot.row);
       state.flyers.splice(i, 1);
       arrived = true;
     }
@@ -621,7 +715,10 @@ function update(dt) {
       if (Math.abs(a.tx - a.x) > 2 || Math.abs(a.ty - a.y) > 2) home = false;
     }
     if (home || state.phaseT > 0.45) {
-      for (let i = 0; i < state.awards.length; i++) state.bags[state.turn].push(state.awards[i].color);
+      for (let i = 0; i < state.awards.length; i++) {
+        const a = state.awards[i];
+        state.bags[state.turn].push({ color: a.color, rings: a.rings || 0 });
+      }
       state.awards = [];
       if (state.flyers.length) {
         state.phase = "settle";
@@ -633,17 +730,18 @@ function update(dt) {
   }
 }
 
-function drawDisc(x, y, r, ci, alpha, sc, shine) {
+function drawDisc(x, y, r, ci, alpha, sc, shine, rings, halo) {
   if (sc <= 0.02 || alpha <= 0.02) return;
   const rr = r * sc;
   const c = COLS[ci];
   const edge = mixHex(c.fill, c.hi, 0.5);
   const outline = Math.max(1.6, rr * 0.11);
+  const shade = halo == null ? outline + 3 : halo;
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.translate(x, y);
   ctx.beginPath();
-  ctx.arc(0, 0, rr + outline + 3, 0, Math.PI * 2);
+  ctx.arc(0, 0, rr + shade, 0, Math.PI * 2);
   ctx.fillStyle = "#000000";
   ctx.fill();
   ctx.beginPath();
@@ -653,6 +751,14 @@ function drawDisc(x, y, r, ci, alpha, sc, shine) {
   ctx.lineWidth = outline;
   ctx.strokeStyle = edge;
   ctx.stroke();
+  const nRings = rings || 0;
+  for (let n = 1; n <= nRings; n++) {
+    ctx.beginPath();
+    ctx.arc(0, 0, rr * Math.max(0.12, 0.42 - (n - 1) * 0.12), 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(255,255,255,0.9)";
+    ctx.lineWidth = Math.max(1.2, rr * 0.07);
+    ctx.stroke();
+  }
   if (shine) {
     ctx.beginPath();
     ctx.arc(0, 0, rr * 0.72, Math.PI * 1.08, Math.PI * 1.78);
@@ -672,7 +778,7 @@ function drawQueue(p) {
     const slot = queueSlot(p, i);
     const next = i === 0;
     const sc = next && mine ? 1.08 : 0.68;
-    drawDisc(slot.x, slot.y, r, bag[i], 1, sc, next);
+    drawDisc(slot.x, slot.y, r, bag[i].color, 1, sc, next, bag[i].rings);
   }
 }
 
@@ -782,16 +888,16 @@ function draw() {
     ctx.restore();
     for (let i = 0; i < row.cells.length; i++) {
       const c = row.cells[i];
-      drawDisc(c.x, c.y, state.discR, c.color, 1, c.sc == null ? 1 : c.sc, true);
+      drawDisc(c.x, c.y, state.discR, c.color, 1, c.sc == null ? 1 : c.sc, true, c.rings);
     }
   }
   for (let i = 0; i < state.flyers.length; i++) {
     const c = state.flyers[i].cell;
-    drawDisc(c.x, c.y, state.discR, c.color, 1, 1, true);
+    drawDisc(c.x, c.y, state.discR, c.color, 1, 1, true, c.rings);
   }
   for (let i = 0; i < state.pending.length; i++) {
     const c = state.pending[i].cell;
-    drawDisc(c.x, c.y, state.discR, c.color, 1, 1, true);
+    drawDisc(c.x, c.y, state.discR, c.color, 1, 1, true, c.rings);
   }
 
   ctx.save();
@@ -806,6 +912,14 @@ function draw() {
 
   drawQueue(0);
   drawQueue(1);
+  if (state.bud) {
+    const row = state.rows[state.bud.row];
+    let x = state.wellX + row.bal * state.half;
+    if (x < state.boardLeft) x = state.boardLeft;
+    if (x > state.boardRight) x = state.boardRight;
+    const y = rowY(state.bud.row);
+    drawDisc(x, y, state.discR * 0.42, state.bud.color, 1, 1, false, 0, 1.2);
+  }
 
   ctx.save();
   ctx.textAlign = "center";
@@ -828,17 +942,12 @@ function draw() {
   ctx.restore();
   for (let i = 0; i < state.awards.length; i++) {
     const a = state.awards[i];
-    drawDisc(a.x, a.y, state.discR, a.color, 1, a.bump ? 0.86 : 1, true);
+    drawDisc(a.x, a.y, state.discR, a.color, 1, a.bump ? 0.86 : 1, true, a.rings);
   }
 }
 
 function onPoint(x, y) {
-  if (state.mode === "title") {
-    requestPageFullscreen();
-    resize();
-    newGame();
-    return;
-  }
+  if (state.mode === "title") return;
   if (state.mode === "over") {
     newGame();
     return;
@@ -851,6 +960,12 @@ function onPoint(x, y) {
 }
 
 function bindInput() {
+  canvas.addEventListener("click", function () {
+    if (state.mode !== "title") return;
+    requestPageFullscreen();
+    resize();
+    newGame();
+  });
   canvas.addEventListener("pointerdown", function (ev) {
     const r = canvas.getBoundingClientRect();
     const p = screenToWorld(ev.clientX - r.left, ev.clientY - r.top);
@@ -859,13 +974,17 @@ function bindInput() {
   canvas.addEventListener("contextmenu", function (ev) { ev.preventDefault(); });
   window.addEventListener("keydown", function (ev) {
     if (state.mode === "title" && (ev.code === "Space" || ev.code === "Enter")) {
-      onPoint(state.w * 0.5, state.h * 0.5);
+      requestPageFullscreen();
+      resize();
+      newGame();
       return;
     }
-    const n = ev.keyCode >= 49 && ev.keyCode <= 55 ? ev.keyCode - 49 : -1;
+    const n = ev.keyCode >= 49 && ev.keyCode <= 54 ? ev.keyCode - 49 : -1;
     if (n >= 0) shoot(n);
   });
   window.addEventListener("resize", resize);
+  document.addEventListener("fullscreenchange", resize);
+  document.addEventListener("webkitfullscreenchange", resize);
 }
 
 function frame(now) {
