@@ -4,17 +4,18 @@
   Odd count sits on the well. Even count straddles it.
   Match-3 scans the whole board. A line pops if at least one disc is
   active: the shot, a disc that shot pushed, or a disc a combo settle moved.
-  Each turn deals a hand of two. The hand is the shot count. No refill
-  between shots. Fire any time a disc is in the hand. Shots during a pop
-  wait at the top of the chosen row and launch when that pop ends.
+  Two players, split on the well. Each holds one disc and one in the
+  queue. A shot spends that player's disc, the queue steps up, and a
+  new disc fills the queue. Either side can fire any time on its half.
+  Shots during a pop wait at the top of the chosen row and launch when
+  that pop ends.
   Match check waits until every fired disc has settled.
   No popping yet. After a settle, same-color discs group when
   2*row^2 + slot^2 <= 6. That caps at 1, and 1 is one row by two slots.
   A link draws behind the discs in the outline color. A pop, when it
   returns, pushes the balance mark one slot on that row per popped disc.
-  An empty row takes
-  two discs at end of turn and does not match. A visible disc on your end
-  slot loses. Animation is not the grid.
+  An empty row takes two discs after a settle and does not match. A
+  visible disc on an end slot loses. Animation is not the grid.
 */
 
 const ROWS = 6;
@@ -276,20 +277,22 @@ function markPops(hit) {
 }
 
 function finishPops() {
-  const me = state.turn;
   for (let r = 0; r < ROWS; r++) {
     const row = state.rows[r];
     const keep = [];
-    let popped = 0;
+    let left = 0;
+    let right = 0;
     for (let i = 0; i < row.cells.length; i++) {
       const c = row.cells[i];
       if (!c.pop) { keep.push(c); continue; }
-      popped++;
+      const side = c.side === 0 || c.side === 1 ? c.side : state.turn;
+      if (side === 0) left++;
+      else right++;
     }
     row.cells = keep;
-    if (!popped) continue;
-    if (me === 0) row.lw += popped;
-    else row.rw += popped;
+    if (!left && !right) continue;
+    row.lw += left;
+    row.rw += right;
     for (let i = 0; i < keep.length; i++) keep[i].moved = 1;
   }
 }
@@ -346,7 +349,7 @@ function newGame() {
   state.stock = [colorPackOfSets(2), colorPackOfSets(2)];
   state.bags = [[], []];
   state.boardBag = [];
-  state.turn = Math.round(Math.random());
+  state.turn = 0;
   dealHand(0);
   dealHand(1);
   state.phase = "idle";
@@ -481,14 +484,17 @@ function contactX(row, side) {
   return slotX(slots[slots.length - 1]) + state.pitch;
 }
 
-function shoot(row) {
+function shoot(row, p) {
   if (state.mode !== "play") return;
   if (row < 0 || row >= ROWS) return;
-  const p = state.turn;
+  if (p !== 0 && p !== 1) return;
   if (!state.bags[p].length) return;
+  state.turn = p;
   if (state.phase === "pop") {
     const disc = state.bags[p].shift();
+    dealHand(p);
     const cell = makeCell(disc.color);
+    cell.side = p;
     state.pending.push({ cell: cell, row: row, side: p, t: 0 });
     parkPending();
     return;
@@ -500,7 +506,9 @@ function shoot(row) {
     state.bigT = 0;
   }
   const disc = state.bags[p].shift();
+  dealHand(p);
   const cell = makeCell(disc.color);
+  cell.side = p;
   cell.x = slotX(p === 0 ? -END - 2 : END + 2);
   cell.y = rowY(row);
   cell.tx = contactX(row, p);
@@ -521,15 +529,9 @@ function closeTurn() {
     state.loser = loss.left && loss.right ? 2 : (loss.left ? 0 : 1);
     return;
   }
-  if (!state.bags[state.turn].length) {
-    growBoard();
-    dealHand(state.turn);
-    state.turn = 1 - state.turn;
-    state.matchCount = 0;
-    state.comboT = 0;
-    state.bigText = "";
-    state.bigT = 0;
-  }
+  growBoard();
+  dealHand(0);
+  dealHand(1);
   state.phase = "idle";
 }
 
@@ -734,7 +736,7 @@ function drawDisc(x, y, r, ci, alpha, sc, shine) {
 
 function drawQueue(p) {
   const bag = state.bags[p];
-  const mine = state.mode === "play" && state.turn === p;
+  const mine = state.mode === "play";
   const r = state.discR;
   for (let i = 0; i < bag.length; i++) {
     const slot = queueSlot(p, i);
@@ -869,10 +871,10 @@ function draw() {
   ctx.save();
   ctx.lineWidth = 3;
   ctx.strokeStyle = PCOL[0];
-  ctx.globalAlpha = state.turn === 0 && state.mode === "play" ? 0.95 : 0.28;
+  ctx.globalAlpha = state.mode === "play" ? 0.95 : 0.28;
   ctx.strokeRect(state.boardLeft - 2, state.boardTop, 4, state.pitch * ROWS);
   ctx.strokeStyle = PCOL[1];
-  ctx.globalAlpha = state.turn === 1 && state.mode === "play" ? 0.95 : 0.28;
+  ctx.globalAlpha = state.mode === "play" ? 0.95 : 0.28;
   ctx.strokeRect(state.boardRight - 2, state.boardTop, 4, state.pitch * ROWS);
   ctx.restore();
 
@@ -911,9 +913,7 @@ function onPoint(x, y) {
   }
   const row = rowAt(y);
   if (row < 0) return;
-  if (state.turn === 0 && x >= state.wellX) return;
-  if (state.turn === 1 && x <= state.wellX) return;
-  shoot(row);
+  shoot(row, x < state.wellX ? 0 : 1);
 }
 
 function bindInput() {
@@ -937,7 +937,7 @@ function bindInput() {
       return;
     }
     const n = ev.keyCode >= 49 && ev.keyCode <= 54 ? ev.keyCode - 49 : -1;
-    if (n >= 0) shoot(n);
+    if (n >= 0) shoot(n, ev.shiftKey ? 1 : 0);
   });
   window.addEventListener("resize", resize);
   document.addEventListener("fullscreenchange", resize);
