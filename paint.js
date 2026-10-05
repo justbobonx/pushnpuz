@@ -2,6 +2,9 @@
   Paint. Discs, links, hand, and the award line.
   bigText / bigT is the player award. Nothing else owns that line.
   Poppers are discs that have left the pack and are bursting out.
+  Depth is a grey fill per grid slot. The cells touching the weight target are #111111.
+  Each slot outward adds #020202. The fill uses lw - rw, not the springing marker, so the pop overshoot does not walk the band.
+  Grid lines stay on top of the fill. No inset.
 */
 
 const COLS = [
@@ -34,7 +37,7 @@ function drawDisc(x, y, r, ci, alpha, sc, shine, ring, noShadow) {
   if (!noShadow) {
     ctx.globalAlpha = alpha * 0.5;
     ctx.beginPath();
-    ctx.arc(0, 0, rr * 1.1, 0, Math.PI * 2);
+    ctx.arc(0, 0, rr * 1.15, 0, Math.PI * 2);
     ctx.fillStyle = "#000000";
     ctx.fill();
   }
@@ -147,8 +150,26 @@ function draw() {
   }
 
   ctx.save();
-  ctx.fillStyle = "rgba(255,255,255,0.025)";
-  ctx.fillRect(state.boardLeft, state.boardTop, state.boardRight - state.boardLeft, state.pitch * ROWS);
+  ctx.beginPath();
+  ctx.rect(state.boardLeft, state.boardTop, state.boardRight - state.boardLeft, state.pitch * ROWS);
+  ctx.clip();
+  for (let r = 0; r < ROWS; r++) {
+    const target = state.rows[r].lw - state.rows[r].rw;
+    const y = state.boardTop + r * state.pitch;
+    const leftEdge = Math.floor(target);
+    const rightEdge = Math.ceil(target);
+    for (let s = -END; s < END; s++) {
+      let steps = 0;
+      if (s + 1 <= leftEdge) steps = leftEdge - (s + 1);
+      else if (s >= rightEdge) steps = s - rightEdge;
+      const v = Math.min(255, 0x11 + steps * 2);
+      ctx.fillStyle = "rgb(" + v + "," + v + "," + v + ")";
+      ctx.fillRect(state.wellX + s * state.half, y, state.half, state.pitch);
+    }
+  }
+  ctx.restore();
+
+  ctx.save();
   const gridBottom = state.boardTop + state.pitch * ROWS;
   ctx.lineWidth = 1;
   ctx.strokeStyle = "rgba(190, 206, 220, 0.28)";

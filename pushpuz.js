@@ -1,7 +1,9 @@
 /*
   PUSH & PUZ
   Six rows on the long axis. Discs pack around a center well.
-  Each side shows the shot disc plus two behind it. On a shot the queue slides up, the next disc grows, and a new one fades in.
+  Each side shows the shot disc plus two behind it. On a shot the queue slides up.
+  A new disc does not arrive with the shot. The refill timer starts at 1s, and a shot restarts it even if the last one has not paid out.
+  When the timer ends, one disc fades in. If the queue is still short, the timer resets. Three dumps are 3s back to full.
   Both sides fire any time a disc is in the hand. The well splits the screen: left tap fires left, right tap fires right.
   Match check waits until every fired disc has settled.
   A match is a color group bigger than 3 that contains a disc shot this volley. Groups live on the board.
@@ -21,6 +23,7 @@ const SETTLE_MAX = 0.9;
 const POP_TIME = 0.42;
 const MARK_TIME = 0.5;
 const QUEUE_SLIDE = 0.26;
+const REFILL = 1;
 
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
@@ -33,7 +36,7 @@ const state = {
   bigText: "", bigT: 0,
   loser: -1, last: 0, flyers: [], poppers: [],
   colorLinks: [], colorGroups: [],
-  qSlide: [0, 0],
+  qSlide: [0, 0], refill: [0, 0],
   boardLeft: 0, boardRight: 0, boardTop: 0, pitch: 0, half: 0, discR: 0, wellX: 0
 };
 
@@ -99,6 +102,7 @@ function newGame() {
   state.colorLinks = [];
   state.colorGroups = [];
   state.qSlide = [0, 0];
+  state.refill = [0, 0];
   state.mode = "play";
   for (let n = 0; n < 40; n++) {
     const dealt = [];
@@ -191,7 +195,7 @@ function shoot(row, side) {
   cell.ty = cell.y;
   cell.vx = side === 0 ? state.pitch * 9 : -state.pitch * 9;
   state.flyers.push({ cell: cell, row: row, side: side, t: 0 });
-  dealHand(side, true);
+  state.refill[side] = REFILL;
   state.qSlide[side] = 1;
   if (state.phase !== "settle" && state.phase !== "pop" && state.phase !== "mark") {
     state.phase = "fly";
@@ -318,8 +322,6 @@ function afterSettle() {
     snapCells();
     findColorGroups();
   }
-  if (!state.bags[0].length) dealHand(0);
-  if (!state.bags[1].length) dealHand(1);
   state.phase = "idle";
 }
 
@@ -328,6 +330,15 @@ function update(dt) {
   if (state.bigT > 0) state.bigT -= dt;
   for (let p = 0; p < 2; p++) {
     if (state.qSlide[p] > 0) state.qSlide[p] = Math.max(0, state.qSlide[p] - dt / QUEUE_SLIDE);
+    if (state.mode === "play" && state.refill[p] > 0) {
+      state.refill[p] -= dt;
+      if (state.refill[p] <= 0) {
+        if (state.bags[p].length < HAND) {
+          state.bags[p].push({ color: takeStock(p), born: 1 });
+          state.refill[p] = state.bags[p].length < HAND ? REFILL : 0;
+        } else state.refill[p] = 0;
+      }
+    }
     const bag = state.bags[p];
     for (let i = 0; i < bag.length; i++) {
       if (bag[i].born > 0) bag[i].born = Math.max(0, bag[i].born - dt / QUEUE_SLIDE);
