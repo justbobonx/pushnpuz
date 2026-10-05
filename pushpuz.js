@@ -5,6 +5,7 @@
   A new disc does not arrive with the shot. The refill timer starts at 1s, and a shot restarts it even if the last one has not paid out.
   When the timer ends, one disc fades in. If the queue is still short, the timer resets. Three dumps are 3s back to full.
   Both sides fire any time a disc is in the hand. The well splits the screen: left tap fires left, right tap fires right.
+  The left seat can be a PC. It fires on its own clock and aims the held color. The bottom circle toggles that seat. Off unless tapped.
   Match check waits until every fired disc has settled.
   A match is a color group bigger than 3 that contains a disc shot this volley. Groups live on the board.
   Pop those discs after a short white hold on the match.
@@ -24,6 +25,7 @@ const POP_TIME = 0.42;
 const MARK_TIME = 0.5;
 const QUEUE_SLIDE = 0.26;
 const REFILL = 1;
+const PC_GAP = 2.6;
 
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
@@ -37,6 +39,7 @@ const state = {
   loser: -1, last: 0, flyers: [], poppers: [],
   colorLinks: [], colorGroups: [],
   qSlide: [0, 0], refill: [0, 0],
+  pcLeft: false, pcWait: PC_GAP,
   boardLeft: 0, boardRight: 0, boardTop: 0, pitch: 0, half: 0, discR: 0, wellX: 0
 };
 
@@ -103,6 +106,7 @@ function newGame() {
   state.colorGroups = [];
   state.qSlide = [0, 0];
   state.refill = [0, 0];
+  state.pcWait = 1.4 + Math.random() * 0.8;
   state.mode = "play";
   for (let n = 0; n < 40; n++) {
     const dealt = [];
@@ -356,6 +360,70 @@ function update(dt) {
       row.bvx = 0;
     }
   }
+  if (state.pcLeft && state.mode === "play") {
+    state.pcWait -= dt;
+    if (state.pcWait <= 0) {
+      if (state.bags[0].length) {
+        const color = state.bags[0][0].color;
+        let best = 0;
+        let bestScore = -1e9;
+        for (let r = 0; r < ROWS; r++) {
+          const row = state.rows[r];
+          const land = (row.lw - row.rw) - row.cells.length;
+          const near = [];
+          for (let rr = r - 1; rr <= r + 1; rr++) {
+            if (rr < 0 || rr >= ROWS) continue;
+            const slots = slotsOf(state.rows[rr]);
+            const cells = state.rows[rr].cells;
+            const dr = rr - r;
+            for (let i = 0; i < cells.length; i++) {
+              if (cells[i].color !== color) continue;
+              const ds = slots[i] - land;
+              if (2 * dr * dr + ds * ds > GROUP_REACH) continue;
+              near.push({ r: rr, slot: slots[i] });
+            }
+          }
+          let extra = 0;
+          if (near.length) {
+            for (let rr = 0; rr < ROWS; rr++) {
+              const cells = state.rows[rr].cells;
+              const slots = slotsOf(state.rows[rr]);
+              for (let i = 0; i < cells.length; i++) {
+                if (cells[i].color !== color) continue;
+                let already = false;
+                for (let k = 0; k < near.length; k++) {
+                  if (near[k].r === rr && near[k].slot === slots[i]) { already = true; break; }
+                }
+                if (already) continue;
+                for (let k = 0; k < near.length; k++) {
+                  const dr = rr - near[k].r;
+                  const ds = slots[i] - near[k].slot;
+                  if (2 * dr * dr + ds * ds <= GROUP_REACH) { extra += 1; break; }
+                }
+              }
+            }
+          }
+          const group = 1 + near.length + extra;
+          let score = group * 12;
+          if (group > MATCH) score += 48;
+          else if (group === MATCH) score += 16;
+          if (land <= -END) score -= 240;
+          else if (land <= -END + 3) score -= 40;
+          score += (row.rw - row.lw) * 1.6;
+          for (let i = 0; i < state.flyers.length; i++) {
+            if (state.flyers[i].row === r && state.flyers[i].side === 0) score -= 10;
+          }
+          score += (Math.random() - 0.5) * 5;
+          if (score > bestScore) {
+            bestScore = score;
+            best = r;
+          }
+        }
+        shoot(best, 0);
+        state.pcWait = PC_GAP + Math.random() * 0.9;
+      } else state.pcWait = 0.4;
+    }
+  }
   if (state.mode === "over") return;
   state.phaseT += dt;
   let arrived = false;
@@ -420,20 +488,48 @@ function update(dt) {
   }
 }
 
+function pcButton() {
+  const r = Math.max(16, state.h * 0.035);
+  return { x: r+8, y: state.h - r - 8, r: r };
+}
+
+function togglePc() {
+  state.pcLeft = !state.pcLeft;
+  state.pcWait = 0.6;
+}
+
 function onPoint(x, y) {
-  if (state.mode === "title") return;
+  const b = pcButton();
+  const dx = x - b.x;
+  const dy = y - b.y;
+  if (dx * dx + dy * dy <= b.r * b.r) {
+    togglePc();
+    return true;
+  }
+  if (state.mode === "title") return false;
   if (state.mode === "over") {
     newGame();
-    return;
+    return false;
   }
   const row = rowAt(y);
-  if (row < 0) return;
-  if (x === state.wellX) return;
-  shoot(row, x < state.wellX ? 0 : 1);
+  if (row < 0) return false;
+  if (x === state.wellX) return false;
+  if (x < state.wellX) {
+    if (state.pcLeft) return false;
+    shoot(row, 0);
+    return false;
+  }
+  shoot(row, 1);
+  return false;
 }
 
 function bindInput() {
+  let swallowClick = false;
   canvas.addEventListener("click", function () {
+    if (swallowClick) {
+      swallowClick = false;
+      return;
+    }
     if (state.mode !== "title") return;
     requestPageFullscreen();
     resize();
@@ -442,16 +538,21 @@ function bindInput() {
   canvas.addEventListener("pointerdown", function (ev) {
     const r = canvas.getBoundingClientRect();
     const p = screenToWorld(ev.clientX - r.left, ev.clientY - r.top);
-    onPoint(p.x, p.y);
+    swallowClick = onPoint(p.x, p.y);
   }, { passive: false });
   canvas.addEventListener("contextmenu", function (ev) { ev.preventDefault(); });
   window.addEventListener("keydown", function (ev) {
+    if (ev.code === "KeyP") {
+      togglePc();
+      return;
+    }
     if (state.mode === "title" && (ev.code === "Space" || ev.code === "Enter")) {
       requestPageFullscreen();
       resize();
       newGame();
       return;
     }
+    if (state.pcLeft) return;
     const n = ev.keyCode >= 49 && ev.keyCode <= 54 ? ev.keyCode - 49 : -1;
     if (n >= 0) shoot(n, 0);
   });

@@ -146,6 +146,7 @@ function draw() {
     ctx.font = "400 " + Math.max(11, font * 0.1) + "px ui-sans-serif, system-ui, sans-serif";
     ctx.fillText(APP_VERSION, state.w * 0.96, state.h * 0.95);
     ctx.restore();
+    drawPcButton();
     return;
   }
 
@@ -271,6 +272,7 @@ function draw() {
 
   drawQueue(0);
   drawQueue(1);
+  drawPcButton();
   ctx.save();
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -286,5 +288,24 @@ function draw() {
     const labelY = Math.max(small * 0.7, state.boardTop * 0.28);
     ctx.fillText(state.bigText, state.w * 0.5, labelY);
   }
+  ctx.restore();
+}
+
+function drawPcButton() {
+  const b = pcButton();
+  const on = state.pcLeft;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+  ctx.fillStyle = on ? PCOL[0] : "rgba(8, 10, 16, 0.72)";
+  ctx.fill();
+  ctx.lineWidth = Math.max(2, b.r * 0.08);
+  ctx.strokeStyle = on ? "#ffe3b8" : "rgba(215, 236, 255, 0.45)";
+  ctx.stroke();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = on ? "#1a1206" : "rgba(215, 236, 255, 0.7)";
+  ctx.font = "700 " + Math.max(11, b.r * 0.62) + "px ui-sans-serif, system-ui, sans-serif";
+  ctx.fillText("PC", b.x, b.y + 1);
   ctx.restore();
 }
