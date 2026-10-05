@@ -3,7 +3,7 @@
   Odd count sits on the well. Even count straddles it.
   Same-color discs group when 2*row^2 + slot^2 <= 6.
   That caps at 1, and 1 is one row by two slots.
-  A group of MATCH or more is a match. An empty row has no discs, so it does not match.
+  A group bigger than MATCH is a match. An empty row has no discs, so it does not match.
 */
 
 const ROWS = 6;
@@ -125,7 +125,7 @@ function matchedGroups() {
   const groups = state.colorGroups || [];
   const hit = [];
   for (let g = 0; g < groups.length; g++) {
-    if (groups[g].discs.length >= MATCH) hit.push(groups[g]);
+    if (groups[g].discs.length > MATCH) hit.push(groups[g]);
   }
   return hit;
 }

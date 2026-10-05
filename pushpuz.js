@@ -1,19 +1,26 @@
 /*
   PUSH & PUZ
   Six rows on the long axis. Discs pack around a center well.
-  Each side holds a hand of two. No refill until that hand is empty and the board has settled.
+  Each side shows the shot disc plus two behind it. On a shot the queue slides up, the next disc grows, and a new one fades in.
   Both sides fire any time a disc is in the hand. The well splits the screen: left tap fires left, right tap fires right.
   Match check waits until every fired disc has settled.
-  A match is a color group of MATCH or more. Groups live on the board.
-  Pop is not back yet. bigText is the award line for the player.
+  A match is a color group bigger than 3 that contains a disc shot this volley. Groups live on the board.
+  Pop those discs after a short white hold on the match.
+  They slide along their row to the scoring edge, and fade. No shadow on the fade.
+  Each popped disc adds one weight on its row for each shooter in the group.
+  Weight is lw or rw. The balance marker springs one slot per weight.
+  bigText is the award line for the player.
   An empty row takes two discs after a settle and does not match.
   A visible disc on your end slot loses. Animation is not the grid.
 */
 
-const HAND = 2;
+const HAND = 3;
 const BOARD_SETS = 3;
 const SETTLE_MIN = 0.26;
 const SETTLE_MAX = 0.9;
+const POP_TIME = 0.42;
+const MARK_TIME = 0.5;
+const QUEUE_SLIDE = 0.26;
 
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
@@ -24,8 +31,9 @@ const state = {
   mode: "title", phase: "idle", phaseT: 0,
   rows: [], bags: [[], []], stock: [[], []], boardBag: [],
   bigText: "", bigT: 0,
-  loser: -1, last: 0, flyers: [],
+  loser: -1, last: 0, flyers: [], poppers: [],
   colorLinks: [], colorGroups: [],
+  qSlide: [0, 0],
   boardLeft: 0, boardRight: 0, boardTop: 0, pitch: 0, half: 0, discR: 0, wellX: 0
 };
 
@@ -56,7 +64,7 @@ function takeBoardColor() {
 }
 
 function makeCell(color) {
-  return { color: color, x: 0, y: 0, vx: 0, vy: 0, tx: 0, ty: 0 };
+  return { color: color, x: 0, y: 0, vx: 0, vy: 0, tx: 0, ty: 0, by: -1 };
 }
 
 function topUp(p) {
@@ -70,8 +78,8 @@ function takeStock(p) {
   return state.stock[p].shift();
 }
 
-function dealHand(p) {
-  while (state.bags[p].length < HAND) state.bags[p].push({ color: takeStock(p) });
+function dealHand(p, fade) {
+  while (state.bags[p].length < HAND) state.bags[p].push({ color: takeStock(p), born: fade ? 1 : 0 });
 }
 
 function newGame() {
@@ -87,8 +95,10 @@ function newGame() {
   state.bigT = 0;
   state.loser = -1;
   state.flyers = [];
+  state.poppers = [];
   state.colorLinks = [];
   state.colorGroups = [];
+  state.qSlide = [0, 0];
   state.mode = "play";
   for (let n = 0; n < 40; n++) {
     const dealt = [];
@@ -144,7 +154,7 @@ function resize() {
   state.boardRight = state.wellX + (END + 0.5) * state.half;
   if (state.mode !== "title") {
     layoutTargets();
-    if (state.phase !== "settle") snapCells();
+    if (state.phase !== "settle" && state.phase !== "pop" && state.phase !== "mark") snapCells();
     for (let i = 0; i < state.flyers.length; i++) {
       const shot = state.flyers[i];
       shot.cell.y = rowY(shot.row);
@@ -181,14 +191,104 @@ function shoot(row, side) {
   cell.ty = cell.y;
   cell.vx = side === 0 ? state.pitch * 9 : -state.pitch * 9;
   state.flyers.push({ cell: cell, row: row, side: side, t: 0 });
-  if (state.phase !== "settle") {
+  dealHand(side, true);
+  state.qSlide[side] = 1;
+  if (state.phase !== "settle" && state.phase !== "pop" && state.phase !== "mark") {
     state.phase = "fly";
     state.phaseT = 0;
   }
 }
 
 function afterSettle() {
-  snapCells();
+  if (state.phase !== "pop" && state.phase !== "mark") snapCells();
+  findColorGroups();
+  const hit = matchedGroups();
+  const doomed = [];
+  let leftN = 0;
+  let rightN = 0;
+  for (let g = 0; g < hit.length; g++) {
+    const group = hit[g];
+    let left = false;
+    let right = false;
+    for (let d = 0; d < group.discs.length; d++) {
+      const by = group.discs[d].cell.by;
+      if (by === 0) left = true;
+      if (by === 1) right = true;
+    }
+    if (!left && !right) continue;
+    for (let d = 0; d < group.discs.length; d++) {
+      const disc = group.discs[d];
+      doomed.push({ cell: disc.cell, left: left, right: right });
+      if (state.phase === "mark") {
+        if (left) {
+          state.rows[disc.r].lw += 1;
+          leftN += 1;
+        }
+        if (right) {
+          state.rows[disc.r].rw += 1;
+          rightN += 1;
+        }
+      }
+    }
+  }
+  if (doomed.length && state.phase !== "mark") {
+    for (let d = 0; d < doomed.length; d++) doomed[d].cell.mark = true;
+    state.phase = "mark";
+    state.phaseT = 0;
+    return;
+  }
+  if (doomed.length) {
+    for (let r = 0; r < ROWS; r++) {
+      const cells = state.rows[r].cells;
+      const keep = [];
+      for (let i = 0; i < cells.length; i++) {
+        let drop = false;
+        for (let d = 0; d < doomed.length; d++) {
+          if (cells[i] === doomed[d].cell) { drop = true; break; }
+        }
+        if (!drop) keep.push(cells[i]);
+      }
+      state.rows[r].cells = keep;
+    }
+    for (let d = 0; d < doomed.length; d++) {
+      const item = doomed[d];
+      const cell = item.cell;
+      cell.mark = false;
+      const dirs = [];
+      if (item.left) dirs.push(-1);
+      if (item.right) dirs.push(1);
+      for (let k = 0; k < dirs.length; k++) {
+        const edge = dirs[k] < 0 ? state.boardLeft : state.boardRight;
+        state.poppers.push({
+          color: cell.color,
+          x0: cell.x,
+          x: cell.x,
+          y: cell.y,
+          edge: edge,
+          t: 0,
+          sc: 1,
+          alpha: 1
+        });
+      }
+    }
+    layoutTargets();
+    findColorGroups();
+    const parts = [];
+    if (leftN) parts.push("LEFT +" + leftN);
+    if (rightN) parts.push("RIGHT +" + rightN);
+    state.bigText = parts.join("  ");
+    state.bigT = 1.8;
+    state.phase = "pop";
+    state.phaseT = 0;
+    return;
+  }
+  for (let r = 0; r < ROWS; r++) {
+    const cells = state.rows[r].cells;
+    for (let i = 0; i < cells.length; i++) {
+      cells[i].by = -1;
+      cells[i].mark = false;
+    }
+  }
   findColorGroups();
   const loss = edgeLoss();
   if (loss.left || loss.right) {
@@ -226,6 +326,13 @@ function afterSettle() {
 function update(dt) {
   if (state.mode === "title") return;
   if (state.bigT > 0) state.bigT -= dt;
+  for (let p = 0; p < 2; p++) {
+    if (state.qSlide[p] > 0) state.qSlide[p] = Math.max(0, state.qSlide[p] - dt / QUEUE_SLIDE);
+    const bag = state.bags[p];
+    for (let i = 0; i < bag.length; i++) {
+      if (bag[i].born > 0) bag[i].born = Math.max(0, bag[i].born - dt / QUEUE_SLIDE);
+    }
+  }
   const kBal = 78;
   const dampBal = 9.5;
   for (let r = 0; r < ROWS; r++) {
@@ -254,6 +361,7 @@ function update(dt) {
     if (!home && shot.t <= 0.7) continue;
     c.x = c.tx;
     c.vx = shot.side === 0 ? state.pitch * 4 : -state.pitch * 4;
+    c.by = shot.side;
     if (shot.side === 0) state.rows[shot.row].cells.unshift(c);
     else state.rows[shot.row].cells.push(c);
     state.flyers.splice(i, 1);
@@ -261,11 +369,26 @@ function update(dt) {
   }
   if (arrived) {
     layoutTargets();
-    state.phase = "settle";
-    state.phaseT = 0;
+    if (state.phase !== "pop" && state.phase !== "mark") {
+      state.phase = "settle";
+      state.phaseT = 0;
+    }
   }
-  if (state.phase === "settle") {
-    let calm = state.flyers.length === 0;
+  if (state.phase === "mark" && state.phaseT >= MARK_TIME) afterSettle();
+  if (state.phase === "pop") {
+    for (let i = state.poppers.length - 1; i >= 0; i--) {
+      const pop = state.poppers[i];
+      pop.t += dt;
+      const u = Math.min(1, pop.t / POP_TIME);
+      const e = u * u * (3 - 2 * u);
+      pop.x = pop.x0 + (pop.edge - pop.x0) * e;
+      pop.sc = 1;
+      pop.alpha = 1 - e;
+      if (pop.t >= POP_TIME) state.poppers.splice(i, 1);
+    }
+  }
+  if (state.phase === "settle" || state.phase === "pop") {
+    let calm = state.flyers.length === 0 && state.poppers.length === 0;
     const k = 78;
     const damp = 9.5;
     for (let r = 0; r < ROWS; r++) {
@@ -279,7 +402,10 @@ function update(dt) {
         if (Math.abs(c.tx - c.x) > 1.4 || Math.abs(c.vx) > 36) calm = false;
       }
     }
-    if ((calm && state.phaseT >= SETTLE_MIN) || (state.flyers.length === 0 && state.phaseT >= SETTLE_MAX)) afterSettle();
+    const popped = state.phase === "pop" && state.poppers.length === 0;
+    const settled = state.phase === "settle" && ((calm && state.phaseT >= SETTLE_MIN) || (state.flyers.length === 0 && state.phaseT >= SETTLE_MAX));
+    if (popped && calm) afterSettle();
+    else if (settled) afterSettle();
   }
 }
 

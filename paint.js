@@ -1,6 +1,7 @@
 /*
   Paint. Discs, links, hand, and the award line.
   bigText / bigT is the player award. Nothing else owns that line.
+  Poppers are discs that have left the pack and are bursting out.
 */
 
 const COLS = [
@@ -22,19 +23,21 @@ function mixHex(a, b, t) {
   return "rgb(" + r + "," + g + "," + bl + ")";
 }
 
-function drawDisc(x, y, r, ci, alpha, sc, shine) {
+function drawDisc(x, y, r, ci, alpha, sc, shine, ring, noShadow) {
   if (sc <= 0.02 || alpha <= 0.02) return;
   const rr = r * sc;
   const c = COLS[ci];
-  const edge = mixHex(c.fill, c.hi, 0.5);
+  const edge = ring || mixHex(c.fill, c.hi, 0.5);
   const outline = Math.max(1.6, rr * 0.11);
   ctx.save();
   ctx.translate(x, y);
-  ctx.globalAlpha = alpha * 0.5;
-  ctx.beginPath();
-  ctx.arc(0, 0, rr * 1.1, 0, Math.PI * 2);
-  ctx.fillStyle = "#000000";
-  ctx.fill();
+  if (!noShadow) {
+    ctx.globalAlpha = alpha * 0.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, rr * 1.1, 0, Math.PI * 2);
+    ctx.fillStyle = "#000000";
+    ctx.fill();
+  }
   ctx.globalAlpha = alpha;
   ctx.beginPath();
   ctx.arc(0, 0, rr, 0, Math.PI * 2);
@@ -64,8 +67,9 @@ function drawColorLinks() {
     const ca = link.a.cell;
     const cb = link.b.cell;
     if (!ca || !cb) continue;
+    const hot = ca.mark && cb.mark;
     const col = COLS[link.color];
-    ctx.strokeStyle = mixHex(col.fill, col.hi, 0.5);
+    ctx.strokeStyle = hot ? "#ffffff" : mixHex(col.fill, col.hi, 0.5);
     ctx.beginPath();
     ctx.moveTo(ca.x, ca.y);
     ctx.lineTo(cb.x, cb.y);
@@ -76,23 +80,38 @@ function drawColorLinks() {
 
 function queueSlot(p, i) {
   const r = state.discR;
-  const n = Math.max(state.bags[p].length, i + 1);
-  const gap = Math.min(state.pitch * 0.9, (state.pitch * ROWS * 0.42) / Math.max(1, n));
   const pad = state.pitch * 0.22;
   const x = p === 0 ? state.boardLeft - r - pad : state.boardRight + r + pad;
   const nextY = state.boardTop + state.pitch * ROWS * 0.5;
-  return { x: x, y: nextY - i * gap };
+  const gap = state.pitch * 0.78;
+  const split = state.pitch * 0.42;
+  const y = i === 0 ? nextY : nextY - split - i * gap;
+  return { x: x, y: y };
 }
 
 function drawQueue(p) {
   const bag = state.bags[p];
   const live = state.mode === "play" && bag.length;
   const r = state.discR;
+  const s = state.qSlide ? state.qSlide[p] : 0;
   for (let i = 0; i < bag.length; i++) {
-    const slot = queueSlot(p, i);
-    const next = i === 0;
-    const sc = next && live ? 1.08 : 0.68;
-    drawDisc(slot.x, slot.y, r, bag[i].color, 1, sc, next);
+    const here = queueSlot(p, i);
+    const was = queueSlot(p, i + 1);
+    const born = bag[i].born || 0;
+    const along = 1 - s;
+    let x = here.x;
+    let y = was.y + (here.y - was.y) * along;
+    let sc = 0.68;
+    let alpha = 1;
+    let shine = false;
+    if (born > 0.001) {
+      y = here.y;
+      alpha = 1 - born;
+    } else if (i === 0 && live) {
+      sc = 0.68 + 0.4 * along;
+      shine = along > 0.55;
+    }
+    drawDisc(x, y, r, bag[i].color, alpha, sc, shine);
   }
 }
 
@@ -206,12 +225,17 @@ function draw() {
     const row = state.rows[r];
     for (let i = 0; i < row.cells.length; i++) {
       const c = row.cells[i];
-      drawDisc(c.x, c.y, state.discR, c.color, 1, 1, true);
+      drawDisc(c.x, c.y, state.discR, c.color, 1, 1, true, c.mark ? "#ffffff" : "");
     }
   }
   for (let i = 0; i < state.flyers.length; i++) {
     const c = state.flyers[i].cell;
     drawDisc(c.x, c.y, state.discR, c.color, 1, 1, true);
+  }
+  const poppers = state.poppers || [];
+  for (let i = 0; i < poppers.length; i++) {
+    const pop = poppers[i];
+    drawDisc(pop.x, pop.y, state.discR, pop.color, pop.alpha, pop.sc, false, "", true);
   }
 
   ctx.save();
