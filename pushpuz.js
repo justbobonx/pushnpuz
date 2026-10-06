@@ -8,7 +8,7 @@
   soft wells, so a shove becomes a drift instead of a bounce.
   A weak pull toward the bunch center keeps the cloud together. It does not pin it.
   Blacks pull that center a little harder so the triangle stays with the mob.
-  A match adds a current on the mob. A 4-match is one unit. Bigger matches add more. The current decays over a few seconds.
+  A match deposits momentum at the cluster. A 4-match is one unit. Bigger matches add more. Offset from the center becomes spin. Both decay over a few seconds.
   Shots stay straight until they join. A bunch farther than center keeps its burn longer.
   Long sides repel to infinity inside a short band. Ends stay open.
 */
@@ -17,7 +17,7 @@ const HAND = 3;
 const BOARD_SETS = 3;
 const SETTLE_MIN = 0.26;
 const SETTLE_MAX = 0.9;
-const POP_TIME = 0.42;
+const POP_TIME = 0.62;
 const MARK_TIME = 0.5;
 const QUEUE_SLIDE = 0.26;
 const REFILL = 1;
@@ -45,7 +45,7 @@ const state = {
   qSlide: [0, 0], refill: [0, 0],
   pcLeft: false, pcWait: PC_GAP, pcPanic: 0.5,
   boardLeft: 0, boardRight: 0, wallTop: 0, wallBot: 0, wallBand: 0,
-  pitch: 0, half: 0, discR: 0, wellX: 0, wellY: 0, armGame: false, grow: GROW, growWait: GROW, flow: 0
+  pitch: 0, half: 0, discR: 0, wellX: 0, wellY: 0, armGame: false, grow: GROW, growWait: GROW, px: 0, py: 0, ang: 0, mobI: 1
 };
 
 function shuffle(list) {
@@ -151,7 +151,9 @@ function newGame() {
   state.armGame = false;
   state.grow = GROW;
   state.growWait = GROW;
-  state.flow = 0;
+  state.px = 0;
+  state.py = 0;
+  state.ang = 0;
   findColorGroups();
 }
 
@@ -295,32 +297,40 @@ function update(dt) {
     if (state.pcWait <= 0) {
       if (state.bags[0].length) {
         const color = state.bags[0][0].color;
+        const link = state.pitch * 1.35;
         let bestY = state.wellY;
         let bestScore = -1e9;
-        const samples = 11;
+        const samples = 13;
         for (let s = 0; s < samples; s++) {
           const y = state.wallTop + (s + 0.5) * (state.wallBot - state.wallTop) / samples;
-          let score = -Math.abs(y - state.wellY) / state.pitch * (0.6 + panic * 2.4);
+          let score = -Math.abs(y - state.wellY) / state.pitch * (1.2 + panic);
           for (let i = 0; i < discs.length; i++) {
             if (discs[i].color !== color) continue;
-            const dy = discs[i].y - y;
+            const dy = Math.abs(discs[i].y - y);
+            if (dy > state.pitch * 1.35) continue;
+            const lane = 1 - dy / (state.pitch * 1.35);
             const dx = discs[i].x - state.boardLeft;
-            const d2 = dx * dx + dy * dy;
-            if (d2 >= state.pitch * state.pitch * 8) continue;
             const onHim = 1 - Math.min(1, Math.max(0, dx / span));
-            score += 10 + onHim * 16;
+            const facing = discs[i].x <= state.wellX ? 1.4 : 0.7;
+            score += (9 + onHim * 12 * panic) * lane * facing;
+            for (let k = 0; k < discs.length; k++) {
+              if (k === i || discs[k].color !== color) continue;
+              const ex = discs[k].x - discs[i].x;
+              const ey = discs[k].y - discs[i].y;
+              if (ex * ex + ey * ey < link * link * 2.4) score += 6 * lane;
+            }
           }
-          if (y < state.wallTop + state.pitch || y > state.wallBot - state.pitch) score -= 20;
-          score += (Math.random() - 0.5) * (2.4 - panic * 1.4);
+          if (y < state.wallTop + state.pitch || y > state.wallBot - state.pitch) score -= 18;
+          score += (Math.random() - 0.5) * (1.6 - panic);
           if (score > bestScore) {
             bestScore = score;
             bestY = y;
           }
         }
         shoot(bestY, 0);
-        const gap = 4.4 + (0.9 - 4.4) * panic;
-        state.pcWait = gap * (0.85 + Math.random() * 0.3);
-      } else state.pcWait = 0.4;
+        const gap = 2.4 + (0.62 - 2.4) * panic;
+        state.pcWait = gap * (0.88 + Math.random() * 0.24);
+      } else state.pcWait = 0.35;
     }
   }
   if (state.mode === "over") return;
@@ -332,6 +342,25 @@ function update(dt) {
   const sub = dt / SUBSTEPS;
   const bodies = [];
   for (let i = 0; i < state.discs.length; i++) bodies.push(state.discs[i]);
+  let mobI = 0;
+  if (state.discs.length) {
+    let sx = 0;
+    let sy = 0;
+    for (let i = 0; i < state.discs.length; i++) {
+      sx += state.discs[i].x;
+      sy += state.discs[i].y;
+    }
+    sx /= state.discs.length;
+    sy /= state.discs.length;
+    for (let i = 0; i < state.discs.length; i++) {
+      const dx = state.discs[i].x - sx;
+      const dy = state.discs[i].y - sy;
+      mobI += dx * dx + dy * dy;
+    }
+  }
+  const floorI = pitch * pitch * 6;
+  if (mobI < floorI) mobI = floorI;
+  state.mobI = mobI;
   for (let step = 0; step < SUBSTEPS; step++) {
     let cx = 0;
     let cy = 0;
@@ -351,7 +380,10 @@ function update(dt) {
         const pull = a.color < 0 ? 7.3 : 3.1;
         a.vx += (cx - a.x) * pull * sub;
         a.vy += (cy - a.y) * pull * sub;
-        a.vx += state.flow * pitch * 1.25 * sub;
+        const spin = state.ang / pitch * (8 / (state.mobI / (pitch * pitch)));
+        const gain = pitch * 1.25 * sub;
+        a.vx += state.px * gain - spin * (a.y - cy) * 1.25 * sub;
+        a.vy += state.py * gain + spin * (a.x - cx) * 1.25 * sub;
       }
       const topGap = a.y - state.wallTop;
       if (topGap < state.wallBand) {
@@ -500,8 +532,8 @@ function update(dt) {
     pop.x += pop.vx * dt;
     pop.y += pop.vy * dt;
     const u = Math.min(1, pop.t / POP_TIME);
-    pop.sc = 1;
-    pop.alpha = 1 - u;
+    pop.sc = 1 + u * 0.28;
+    pop.alpha = 1 - u * u;
     if (pop.t >= POP_TIME) state.poppers.splice(i, 1);
   }
   findColorGroups();
@@ -569,19 +601,37 @@ function update(dt) {
       for (let d = 0; d < doomed.length; d++) mx += doomed[d].x;
       exit = mx / doomed.length < state.wellX ? 1 : -1;
     }
+    let mx = 0;
+    let my = 0;
+    for (let d = 0; d < doomed.length; d++) {
+      mx += doomed[d].x;
+      my += doomed[d].y;
+    }
+    mx /= doomed.length;
+    my /= doomed.length;
     const unit = doomed.length / 4;
-    state.flow += exit * unit;
-    if (state.flow > 4) state.flow = 4;
-    if (state.flow < -4) state.flow = -4;
+    const ry = my - state.wellY;
+    state.px += exit * unit;
+    state.ang += exit * (-ry) * unit;
+    if (state.px > 4) state.px = 4;
+    if (state.px < -4) state.px = -4;
+    const angCap = pitch * 4;
+    if (state.ang > angCap) state.ang = angCap;
+    if (state.ang < -angCap) state.ang = -angCap;
     for (let d = 0; d < doomed.length; d++) {
       const cell = doomed[d];
       cell.mark = false;
+      let dir = -exit;
+      if (hold.left && hold.right) dir = cell.by === 0 ? -1 : 1;
+      const ox = cell.x - state.wellX;
+      const oy = cell.y - state.wellY;
+      const od = Math.sqrt(ox * ox + oy * oy) || 1;
       state.poppers.push({
         color: cell.color,
         x: cell.x,
         y: cell.y,
-        vx: exit * pitch * unit * 0.35,
-        vy: (cell.y - state.wellY) * 0.08,
+        vx: dir * pitch * 2.6 + ox / od * pitch * 1.7,
+        vy: oy / od * pitch * 1.7,
         t: 0,
         sc: 1,
         alpha: 1
@@ -628,7 +678,10 @@ function update(dt) {
     state.phase = "idle";
     state.loser = loss.left && loss.right ? 2 : (loss.left ? 0 : 1);
   }
-  state.flow *= Math.exp(-0.2 * dt);
+  const fade = Math.exp(-0.2 * dt);
+  state.px *= fade;
+  state.py *= fade;
+  state.ang *= fade;
   if (state.discs.length) {
     let sx = 0;
     let sy = 0;
