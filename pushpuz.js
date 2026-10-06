@@ -1,7 +1,7 @@
 /*
   PUSH & PUZ
   First cut without slots or rows. Shots are free along your end.
-  Three blacks float near the bunch center and hold a soft triangle.
+  Three blacks float near the bunch center, hold a soft triangle, and drift clockwise around it.
   They do not match. Colored discs do not stick to them.
   Every pair has a well: repel inside, pull outside, flat past a cutoff.
   Like colors pull harder and link. The blob is in water: strong drag,
@@ -30,6 +30,7 @@ const GROW_SLOW = 1.08;
 const GROW_MIN = 0.45;
 const GROW_MAX = 4;
 const BOARD_NOMINAL = 32;
+const DISCS_PER_H = 40;
 
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
@@ -45,7 +46,8 @@ const state = {
   qSlide: [0, 0], refill: [0, 0],
   pcLeft: false, pcWait: PC_GAP, pcPanic: 0.5,
   boardLeft: 0, boardRight: 0, wallTop: 0, wallBot: 0, wallBand: 0,
-  pitch: 0, half: 0, discR: 0, wellX: 0, wellY: 0, armGame: false, grow: GROW, growWait: GROW, px: 0, py: 0, ang: 0, mobI: 1
+  pitch: 0, half: 0, discR: 0, wellX: 0, wellY: 0, armGame: false, grow: GROW, growWait: GROW, px: 0, py: 0, ang: 0, mobI: 1,
+  pcButton: { x: 0, y: 0, r: 0 }
 };
 
 function shuffle(list) {
@@ -184,18 +186,15 @@ function resize() {
   state.portrait = viewH > viewW;
   state.w = Math.max(viewW, viewH);
   state.h = Math.min(viewW, viewH);
-  const queuePad = 0.9;
-  const pitchH = state.h / 6;
-  const pitchW = state.w / (END + 0.5 + queuePad * 2);
-  state.pitch = Math.min(pitchH, pitchW);
+  state.discR = state.h / DISCS_PER_H;
+  state.pitch = state.discR / 0.34;
   state.half = state.pitch * 0.5;
-  state.discR = state.pitch * 0.34;
-  const midX = state.w * 0.5;
-  state.boardLeft = midX - (END + 0.5) * state.half;
-  state.boardRight = midX + (END + 0.5) * state.half;
+  state.boardLeft = state.pitch;
+  state.boardRight = state.w - state.pitch;
   state.wallBand = state.pitch * 0.55;
   state.wallTop = state.pitch * 0.15;
-  state.wallBot = state.h - state.pitch * 0.15;
+  state.wallBot = state.h - state.pitch * 0.15;  
+  const midX = state.w * 0.5;  
   if (oldPitch > 0 && state.mode !== "title" && state.discs.length && oldW > 0) {
     const s = state.pitch / oldPitch;
     const ox = oldW * 0.5;
@@ -220,6 +219,9 @@ function resize() {
     state.wellX = sx / discs.length;
     state.wellY = sy / discs.length;
   }
+  
+  const r = Math.max(18, state.h * 0.025);
+  state.pcButton = { x: r + 8, y: state.h - r - 8, r: r };
 }
 
 function screenToWorld(sx, sy) {
@@ -384,6 +386,11 @@ function update(dt) {
         const gain = pitch * 1.25 * sub;
         a.vx += state.px * gain - spin * (a.y - cy) * 1.25 * sub;
         a.vy += state.py * gain + spin * (a.x - cx) * 1.25 * sub;
+        if (a.color < 0) {
+          const orbit = 5.6;
+          a.vx += -(a.y - cy) * orbit * sub;
+          a.vy += (a.x - cx) * orbit * sub;
+        }
       }
       const topGap = a.y - state.wallTop;
       if (topGap < state.wallBand) {
@@ -678,6 +685,7 @@ function update(dt) {
     state.phase = "idle";
     state.loser = loss.left && loss.right ? 2 : (loss.left ? 0 : 1);
   }
+  state.blackSpin += 0.45 * dt;
   const fade = Math.exp(-0.2 * dt);
   state.px *= fade;
   state.py *= fade;
@@ -694,18 +702,13 @@ function update(dt) {
   }
 }
 
-function pcButton() {
-  const r = Math.max(16, state.h * 0.035);
-  return { x: r + 8, y: state.h - r - 8, r: r };
-}
-
 function togglePc() {
   state.pcLeft = !state.pcLeft;
   state.pcWait = 0.6;
 }
 
 function onPoint(x, y) {
-  const b = pcButton();
+  const b = state.pcButton;
   const dx = x - b.x;
   const dy = y - b.y;
   if (dx * dx + dy * dy <= b.r * b.r) {

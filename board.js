@@ -7,7 +7,6 @@
   holds a disc from this volley is a match.
 */
 
-const END = 15;
 const MATCH = 3;
 const CONNECT = 1.35;
 const BREAK = 1.85;

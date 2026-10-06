@@ -26,7 +26,7 @@ function mixHex(a, b, t) {
   return "rgb(" + r + "," + g + "," + bl + ")";
 }
 
-function drawDisc(x, y, r, ci, alpha, sc, shine, ring, noShadow) {
+function drawDisc(x, y, r, ci, alpha, sc, shine, ring, noShadow, spin) {
   if (sc <= 0.02 || alpha <= 0.02) return;
   const rr = r * sc;
   const black = ci < 0;
@@ -51,6 +51,7 @@ function drawDisc(x, y, r, ci, alpha, sc, shine, ring, noShadow) {
   ctx.strokeStyle = edge;
   ctx.stroke();
   if (black) {
+    ctx.rotate(spin || 0);
     ctx.beginPath();
     ctx.arc(-rr * 0.2, -rr * 0.28, rr * 0.34, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(196, 200, 206, 0.9)";
@@ -187,7 +188,7 @@ function draw() {
   const discs = state.discs || [];
   for (let i = 0; i < discs.length; i++) {
     const c = discs[i];
-    drawDisc(c.x, c.y, state.discR, c.color, 1, 1, c.color >= 0, c.mark ? "#ffffff" : "");
+    drawDisc(c.x, c.y, state.discR, c.color, 1, 1, c.color >= 0, c.mark ? "#ffffff" : "", false, c.color < 0 ? state.blackSpin : 0);
   }
   for (let i = 0; i < state.flyers.length; i++) {
     const c = state.flyers[i].cell;
@@ -221,7 +222,7 @@ function draw() {
 }
 
 function drawPcButton() {
-  const b = pcButton();
+  const b = state.pcButton;
   const on = state.pcLeft;
   ctx.save();
   ctx.beginPath();
@@ -235,7 +236,7 @@ function drawPcButton() {
   ctx.textBaseline = "middle";
   ctx.fillStyle = on ? "#1a1206" : "rgba(215, 236, 255, 0.7)";
   ctx.font = "700 " + Math.max(11, b.r * 0.62) + "px ui-sans-serif, system-ui, sans-serif";
-  ctx.fillText("PC", b.x, b.y + 1);
+  ctx.fillText("AI", b.x, b.y + 1);
   if (on) {
     const panic = state.pcPanic || 0;
     const x = b.x + b.r + 8;
