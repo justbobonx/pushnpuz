@@ -87,8 +87,8 @@ function edgeLoss() {
   const discs = state.discs;
   for (let i = 0; i < discs.length; i++) {
     if (discs[i].color < 0) continue;
-    if (discs[i].x <= state.boardLeft) left = true;
-    if (discs[i].x >= state.boardRight) right = true;
+    if (discs[i].x - state.discR <= state.boardLeft) left = true;
+    if (discs[i].x + state.discR >= state.boardRight) right = true;
   }
   return { left: left, right: right };
 }

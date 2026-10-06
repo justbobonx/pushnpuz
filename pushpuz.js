@@ -9,7 +9,7 @@
   A weak pull toward the bunch center keeps the cloud together. It does not pin it.
   Blacks pull that center a little harder so the triangle stays with the mob.
   A match deposits momentum at the cluster. A 4-match is one unit. Bigger matches add more. Offset from the center becomes spin. Both decay over a few seconds.
-  Shots stay straight until they join. A bunch farther than center keeps its burn longer.
+  Shots stay straight until they join. Launch speed covers the distance to the blob center.
   Long sides repel to infinity inside a short band. Ends stay open.
 */
 
@@ -31,6 +31,7 @@ const GROW_MIN = 0.45;
 const GROW_MAX = 4;
 const BOARD_NOMINAL = 32;
 const DISCS_PER_H = 40;
+const FLYER_PULL_STRENGTH = 330;
 
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
@@ -112,8 +113,13 @@ function newGame() {
   const colored = [];
   const shells = [outer * 2 / 3, outer];
   const step = outer / 3;
+  const centerR = blackR * 0.46;
   for (let attempt = 0; attempt < 24; attempt++) {
     colored.length = 0;
+    for (let i = 0; i < 3; i++) {
+      const ang = i * 2 * Math.PI / 3 - Math.PI / 2 + Math.PI / 3;
+      colored.push(makeDisc(takeBoardColor(), midX + Math.cos(ang) * centerR, midY + Math.sin(ang) * centerR));
+    }
     for (let s = 0; s < shells.length; s++) {
       const rad = shells[s];
       const n = Math.max(6, Math.round(2 * Math.PI * rad / Math.max(step, state.discR * 2.2)));
@@ -245,17 +251,18 @@ function shoot(y, side) {
   const x0 = side === 0 ? state.boardLeft - state.pitch : state.boardRight + state.pitch;
   const cell = makeDisc(disc.color, x0, y);
   const dir = side === 0 ? 1 : -1;
-  const nominal = Math.abs(state.w * 0.5 - x0);
-  const reach = (state.wellX - x0) * dir;
-  let scale = 1;
-  if (nominal > 1 && reach > state.pitch * 0.35) {
-    scale = reach / nominal;
-    if (scale < 0.45) scale = 0.45;
-    if (scale > 2.4) scale = 2.4;
-  }
-  cell.vx = dir * state.pitch * 18 * scale;
+  const dx = state.wellX - x0;
+  const dy = state.wellY - y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const trip = 1.9;
+  const drag = 2.4;
+  let speed = dist * drag / (1 - Math.exp(-drag * trip));
+  if (speed < state.pitch * 12) speed = state.pitch * 12;
+  if (speed > state.pitch * 70) speed = state.pitch * 70;
+  cell.vx = dir * speed;
   cell.vy = 0;
-  state.flyers.push({ cell: cell, side: side, t: 0, x0: x0, dir: dir, burnFor: BURN * scale });
+  const pitches = dist / state.pitch;
+  state.flyers.push({ cell: cell, side: side, t: 0, x0: x0, dir: dir, burnFor: BURN * (0.8 + pitches / 18) });
   state.refill[side] = REFILL;
   state.qSlide[side] = 1;
   if (state.phase !== "settle" && state.phase !== "pop" && state.phase !== "mark") {
@@ -498,7 +505,7 @@ function update(dt) {
       const dy = cy - c.y;
       const r2 = dx * dx + dy * dy;
       const soft = pitch * pitch;
-      const pull = (pitch * pitch * pitch * 240) / (r2 + soft);
+      const pull = (pitch * pitch * pitch * FLYER_PULL_STRENGTH) / (r2 + soft);
       const r = Math.sqrt(r2);
       if (r > 0.001) {
         c.vx += pull * dx / r * dt;
