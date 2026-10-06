@@ -1,20 +1,13 @@
 /*
   PUSH & PUZ
-  Six rows on the long axis. Discs pack around a center well.
-  Each side shows the shot disc plus two behind it. On a shot the queue slides up.
-  A new disc does not arrive with the shot. The refill timer starts at 1s, and a shot restarts it even if the last one has not paid out.
-  When the timer ends, one disc fades in. If the queue is still short, the timer resets. Three dumps are 3s back to full.
-  Both sides fire any time a disc is in the hand. The well splits the screen: left tap fires left, right tap fires right.
-  The left seat can be a PC. It fires on its own clock and aims the held color. The bottom circle toggles that seat. Off unless tapped.
-  Match check waits until every fired disc has settled.
-  A match is a color group bigger than 3 that contains a disc shot this volley. Groups live on the board.
-  Pop those discs after a short white hold on the match.
-  They slide along their row to the scoring edge, and fade. No shadow on the fade.
-  Each popped disc adds one weight on its row for each shooter in the group.
-  Weight is lw or rw. The balance marker springs one slot per weight.
-  bigText is the award line for the player.
-  An empty row takes two discs after a settle and does not match.
-  A visible disc on your end slot loses. Animation is not the grid.
+  First cut without slots or rows. Shots are free along your end.
+  A black column sits on the center line at the old slot spacing, one pitch,
+  spanning the corridor so a shot cannot reach the other side.
+  Every pair has a well at that spacing: repel inside, pull outside, flat past a cutoff.
+  Like colors pull harder and link. Blacks pull each other like a color, and pull
+  every disc more weakly and farther. They do not match.
+  A weak pull toward the bunch center keeps the cloud together. It does not pin it.
+  Long sides repel to infinity inside a short band. Ends stay open.
 */
 
 const HAND = 3;
@@ -26,6 +19,14 @@ const MARK_TIME = 0.5;
 const QUEUE_SLIDE = 0.26;
 const REFILL = 1;
 const PC_GAP = 2.6;
+const SUBSTEPS = 8;
+const BURN = 0.14;
+const GROW = 2;
+const GROW_FAST = 0.92;
+const GROW_SLOW = 1.08;
+const GROW_MIN = 0.45;
+const GROW_MAX = 4;
+const BOARD_NOMINAL = 32;
 
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
@@ -34,13 +35,14 @@ const APP_VERSION = ((document.getElementById("puz-version") || {}).textContent 
 const state = {
   w: 0, h: 0, viewW: 0, viewH: 0, dpr: 1, portrait: false,
   mode: "title", phase: "idle", phaseT: 0,
-  rows: [], bags: [[], []], stock: [[], []], boardBag: [],
-  bigText: "", bigT: 0,
+  discs: [], blacks: [], bags: [[], []], stock: [[], []], boardBag: [],
+  bigText: "", bigT: 0, holds: [],
   loser: -1, last: 0, flyers: [], poppers: [],
   colorLinks: [], colorGroups: [],
   qSlide: [0, 0], refill: [0, 0],
   pcLeft: false, pcWait: PC_GAP,
-  boardLeft: 0, boardRight: 0, boardTop: 0, pitch: 0, half: 0, discR: 0, wellX: 0
+  boardLeft: 0, boardRight: 0, wallTop: 0, wallBot: 0, wallBand: 0,
+  pitch: 0, half: 0, discR: 0, wellX: 0, wellY: 0, armGame: false, grow: GROW, growWait: GROW
 };
 
 function shuffle(list) {
@@ -69,10 +71,6 @@ function takeBoardColor() {
   return state.boardBag.shift();
 }
 
-function makeCell(color) {
-  return { color: color, x: 0, y: 0, vx: 0, vy: 0, tx: 0, ty: 0, by: -1 };
-}
-
 function topUp(p) {
   if (state.stock[p].length) return;
   const more = colorPackOfSets(2);
@@ -89,40 +87,64 @@ function dealHand(p, fade) {
 }
 
 function newGame() {
-  state.rows = freshRows();
+  const pitch = state.pitch;
+  const midX = state.w * 0.5;
+  const midY = state.h * 0.5;
+  const blacks = [];
+  for (let i = 0; i < 6; i++) {
+    const ang = i * Math.PI / 3 - Math.PI / 2;
+    const disc = makeDisc(BLACK, midX + Math.cos(ang) * pitch, midY + Math.sin(ang) * pitch);
+    disc.by = -2;
+    blacks.push(disc);
+  }
   state.stock = [colorPackOfSets(2), colorPackOfSets(2)];
   state.bags = [[], []];
   state.boardBag = [];
   dealHand(0);
   dealHand(1);
+  const colored = [];
+  const shells = [2, 3];
+  for (let attempt = 0; attempt < 24; attempt++) {
+    colored.length = 0;
+    for (let s = 0; s < shells.length; s++) {
+      const rad = shells[s] * pitch;
+      const n = Math.max(6, Math.round(2 * Math.PI * rad / pitch));
+      const spin = s * Math.PI / n;
+      for (let i = 0; i < n; i++) {
+        const ang = spin + i * 2 * Math.PI / n;
+        colored.push(makeDisc(takeBoardColor(), midX + Math.cos(ang) * rad, midY + Math.sin(ang) * rad));
+      }
+    }
+    state.discs = blacks.concat(colored);
+    state.blacks = blacks;
+    findColorGroups();
+    if (!matchedGroups().length) break;
+    for (let k = colored.length - 1; k >= 0; k--) state.boardBag.unshift(colored[k].color);
+    shuffle(state.boardBag);
+  }
+  let sx = 0;
+  let sy = 0;
+  for (let i = 0; i < state.discs.length; i++) {
+    sx += state.discs[i].x;
+    sy += state.discs[i].y;
+  }
+  state.wellX = sx / state.discs.length;
+  state.wellY = sy / state.discs.length;
   state.phase = "idle";
   state.phaseT = 0;
   state.bigText = "";
   state.bigT = 0;
+  state.holds = [];
   state.loser = -1;
   state.flyers = [];
   state.poppers = [];
-  state.colorLinks = [];
-  state.colorGroups = [];
   state.qSlide = [0, 0];
   state.refill = [0, 0];
   state.pcWait = 1.4 + Math.random() * 0.8;
   state.mode = "play";
-  for (let n = 0; n < 40; n++) {
-    const dealt = [];
-    for (let r = 0; r < ROWS; r++) {
-      const a = takeBoardColor();
-      const b = takeBoardColor();
-      dealt.push(a, b);
-      state.rows[r].cells = [makeCell(a), makeCell(b)];
-    }
-    findColorGroups();
-    if (!matchedGroups().length) break;
-    for (let k = dealt.length - 1; k >= 0; k--) state.boardBag.unshift(dealt[k]);
-    shuffle(state.boardBag);
-  }
-  layoutTargets();
-  snapCells();
+  state.armGame = false;
+  state.grow = GROW;
+  state.growWait = GROW;
   findColorGroups();
 }
 
@@ -144,6 +166,9 @@ function resize() {
   canvas.height = Math.round(viewH * dpr);
   canvas.style.width = viewW + "px";
   canvas.style.height = viewH + "px";
+  const oldW = state.w;
+  const oldH = state.h;
+  const oldPitch = state.pitch || 0;
   state.viewW = viewW;
   state.viewH = viewH;
   state.dpr = dpr;
@@ -151,23 +176,40 @@ function resize() {
   state.w = Math.max(viewW, viewH);
   state.h = Math.min(viewW, viewH);
   const queuePad = 0.9;
-  const pitchH = state.h / ROWS;
+  const pitchH = state.h / 6;
   const pitchW = state.w / (END + 0.5 + queuePad * 2);
   state.pitch = Math.min(pitchH, pitchW);
   state.half = state.pitch * 0.5;
   state.discR = state.pitch * 0.34;
-  state.wellX = state.w * 0.5;
-  state.boardTop = (state.h - state.pitch * ROWS) * 0.5;
-  state.boardLeft = state.wellX - (END + 0.5) * state.half;
-  state.boardRight = state.wellX + (END + 0.5) * state.half;
-  if (state.mode !== "title") {
-    layoutTargets();
-    if (state.phase !== "settle" && state.phase !== "pop" && state.phase !== "mark") snapCells();
-    for (let i = 0; i < state.flyers.length; i++) {
-      const shot = state.flyers[i];
-      shot.cell.y = rowY(shot.row);
-      shot.cell.tx = contactX(shot.row, shot.side);
+  const midX = state.w * 0.5;
+  state.boardLeft = midX - (END + 0.5) * state.half;
+  state.boardRight = midX + (END + 0.5) * state.half;
+  state.wallBand = state.pitch * 0.55;
+  state.wallTop = state.pitch * 0.15;
+  state.wallBot = state.h - state.pitch * 0.15;
+  if (oldPitch > 0 && state.mode !== "title" && state.discs.length && oldW > 0) {
+    const s = state.pitch / oldPitch;
+    const ox = oldW * 0.5;
+    const oy = oldH * 0.5;
+    const discs = state.discs;
+    for (let i = 0; i < discs.length; i++) {
+      discs[i].x = midX + (discs[i].x - ox) * s;
+      discs[i].y = state.h * 0.5 + (discs[i].y - oy) * s;
     }
+    for (let i = 0; i < state.flyers.length; i++) {
+      const c = state.flyers[i].cell;
+      c.x = midX + (c.x - ox) * s;
+      c.y = state.h * 0.5 + (c.y - oy) * s;
+      state.flyers[i].x0 = midX + (state.flyers[i].x0 - ox) * s;
+    }
+    let sx = 0;
+    let sy = 0;
+    for (let i = 0; i < discs.length; i++) {
+      sx += discs[i].x;
+      sy += discs[i].y;
+    }
+    state.wellX = sx / discs.length;
+    state.wellY = sy / discs.length;
   }
 }
 
@@ -176,157 +218,31 @@ function screenToWorld(sx, sy) {
   return { x: sy, y: state.h - sx };
 }
 
-function rowAt(y) {
-  const r = Math.floor((y - state.boardTop) / state.pitch);
-  if (r < 0 || r >= ROWS) return -1;
-  return r;
-}
-
-function shoot(row, side) {
+function shoot(y, side) {
   if (state.mode !== "play") return;
-  if (row < 0 || row >= ROWS) return;
   if (side !== 0 && side !== 1) return;
   if (!state.bags[side].length) return;
+  const lo = state.wallTop + state.discR;
+  const hi = state.wallBot - state.discR;
+  if (y < lo) y = lo;
+  if (y > hi) y = hi;
   if (state.phase === "idle") {
     state.bigText = "";
     state.bigT = 0;
   }
   const disc = state.bags[side].shift();
-  const cell = makeCell(disc.color);
-  cell.x = slotX(side === 0 ? -END - 2 : END + 2);
-  cell.y = rowY(row);
-  cell.tx = contactX(row, side);
-  cell.ty = cell.y;
-  cell.vx = side === 0 ? state.pitch * 9 : -state.pitch * 9;
-  state.flyers.push({ cell: cell, row: row, side: side, t: 0 });
+  const x0 = side === 0 ? state.boardLeft - state.pitch : state.boardRight + state.pitch;
+  const cell = makeDisc(disc.color, x0, y);
+  const dir = side === 0 ? 1 : -1;
+  cell.vx = dir * state.pitch * 18;
+  cell.vy = 0;
+  state.flyers.push({ cell: cell, side: side, t: 0, x0: x0, dir: dir });
   state.refill[side] = REFILL;
   state.qSlide[side] = 1;
   if (state.phase !== "settle" && state.phase !== "pop" && state.phase !== "mark") {
     state.phase = "fly";
     state.phaseT = 0;
   }
-}
-
-function afterSettle() {
-  if (state.phase !== "pop" && state.phase !== "mark") snapCells();
-  findColorGroups();
-  const hit = matchedGroups();
-  const doomed = [];
-  let leftN = 0;
-  let rightN = 0;
-  for (let g = 0; g < hit.length; g++) {
-    const group = hit[g];
-    let left = false;
-    let right = false;
-    for (let d = 0; d < group.discs.length; d++) {
-      const by = group.discs[d].cell.by;
-      if (by === 0) left = true;
-      if (by === 1) right = true;
-    }
-    if (!left && !right) continue;
-    for (let d = 0; d < group.discs.length; d++) {
-      const disc = group.discs[d];
-      doomed.push({ cell: disc.cell, left: left, right: right });
-      if (state.phase === "mark") {
-        if (left) {
-          state.rows[disc.r].lw += 1;
-          leftN += 1;
-        }
-        if (right) {
-          state.rows[disc.r].rw += 1;
-          rightN += 1;
-        }
-      }
-    }
-  }
-  if (doomed.length && state.phase !== "mark") {
-    for (let d = 0; d < doomed.length; d++) doomed[d].cell.mark = true;
-    state.phase = "mark";
-    state.phaseT = 0;
-    return;
-  }
-  if (doomed.length) {
-    for (let r = 0; r < ROWS; r++) {
-      const cells = state.rows[r].cells;
-      const keep = [];
-      for (let i = 0; i < cells.length; i++) {
-        let drop = false;
-        for (let d = 0; d < doomed.length; d++) {
-          if (cells[i] === doomed[d].cell) { drop = true; break; }
-        }
-        if (!drop) keep.push(cells[i]);
-      }
-      state.rows[r].cells = keep;
-    }
-    for (let d = 0; d < doomed.length; d++) {
-      const item = doomed[d];
-      const cell = item.cell;
-      cell.mark = false;
-      const dirs = [];
-      if (item.left) dirs.push(-1);
-      if (item.right) dirs.push(1);
-      for (let k = 0; k < dirs.length; k++) {
-        const edge = dirs[k] < 0 ? state.boardLeft : state.boardRight;
-        state.poppers.push({
-          color: cell.color,
-          x0: cell.x,
-          x: cell.x,
-          y: cell.y,
-          edge: edge,
-          t: 0,
-          sc: 1,
-          alpha: 1
-        });
-      }
-    }
-    layoutTargets();
-    findColorGroups();
-    const parts = [];
-    if (leftN) parts.push("LEFT +" + leftN);
-    if (rightN) parts.push("RIGHT +" + rightN);
-    state.bigText = parts.join("  ");
-    state.bigT = 1.8;
-    state.phase = "pop";
-    state.phaseT = 0;
-    return;
-  }
-  for (let r = 0; r < ROWS; r++) {
-    const cells = state.rows[r].cells;
-    for (let i = 0; i < cells.length; i++) {
-      cells[i].by = -1;
-      cells[i].mark = false;
-    }
-  }
-  findColorGroups();
-  const loss = edgeLoss();
-  if (loss.left || loss.right) {
-    state.mode = "over";
-    state.phase = "idle";
-    state.loser = loss.left && loss.right ? 2 : (loss.left ? 0 : 1);
-    return;
-  }
-  let filled = false;
-  for (let r = 0; r < ROWS; r++) {
-    const row = state.rows[r];
-    if (row.cells.length) continue;
-    filled = true;
-    const center = row.lw - row.rw;
-    for (let n = 0; n < 2; n++) {
-      const cell = makeCell(takeBoardColor());
-      const slot = center + (n === 0 ? -1 : 1);
-      cell.x = slotX(slot);
-      cell.tx = cell.x;
-      cell.y = rowY(r);
-      cell.ty = cell.y;
-      row.cells.push(cell);
-    }
-  }
-  if (filled) {
-    layoutTargets();
-    snapCells();
-    findColorGroups();
-  }
-  state.phase = "idle";
 }
 
 function update(dt) {
@@ -348,149 +264,351 @@ function update(dt) {
       if (bag[i].born > 0) bag[i].born = Math.max(0, bag[i].born - dt / QUEUE_SLIDE);
     }
   }
-  const kBal = 78;
-  const dampBal = 9.5;
-  for (let r = 0; r < ROWS; r++) {
-    const row = state.rows[r];
-    const target = row.lw - row.rw;
-    row.bvx += ((target - row.bal) * kBal - row.bvx * dampBal) * dt;
-    row.bal += row.bvx * dt;
-    if (Math.abs(target - row.bal) < 0.02 && Math.abs(row.bvx) < 0.4) {
-      row.bal = target;
-      row.bvx = 0;
-    }
-  }
   if (state.pcLeft && state.mode === "play") {
     state.pcWait -= dt;
     if (state.pcWait <= 0) {
       if (state.bags[0].length) {
         const color = state.bags[0][0].color;
-        let best = 0;
+        let bestY = state.h * 0.5;
         let bestScore = -1e9;
-        for (let r = 0; r < ROWS; r++) {
-          const row = state.rows[r];
-          const land = (row.lw - row.rw) - row.cells.length;
-          const near = [];
-          for (let rr = r - 1; rr <= r + 1; rr++) {
-            if (rr < 0 || rr >= ROWS) continue;
-            const slots = slotsOf(state.rows[rr]);
-            const cells = state.rows[rr].cells;
-            const dr = rr - r;
-            for (let i = 0; i < cells.length; i++) {
-              if (cells[i].color !== color) continue;
-              const ds = slots[i] - land;
-              if (2 * dr * dr + ds * ds > GROUP_REACH) continue;
-              near.push({ r: rr, slot: slots[i] });
-            }
+        const samples = 9;
+        for (let s = 0; s < samples; s++) {
+          const y = state.wallTop + (s + 0.5) * (state.wallBot - state.wallTop) / samples;
+          let score = 0;
+          const discs = state.discs;
+          for (let i = 0; i < discs.length; i++) {
+            if (discs[i].color !== color) continue;
+            const dy = discs[i].y - y;
+            const dx = discs[i].x - (state.boardLeft + state.pitch);
+            const d2 = dx * dx + dy * dy;
+            if (d2 < state.pitch * state.pitch * 6) score += 14;
           }
-          let extra = 0;
-          if (near.length) {
-            for (let rr = 0; rr < ROWS; rr++) {
-              const cells = state.rows[rr].cells;
-              const slots = slotsOf(state.rows[rr]);
-              for (let i = 0; i < cells.length; i++) {
-                if (cells[i].color !== color) continue;
-                let already = false;
-                for (let k = 0; k < near.length; k++) {
-                  if (near[k].r === rr && near[k].slot === slots[i]) { already = true; break; }
-                }
-                if (already) continue;
-                for (let k = 0; k < near.length; k++) {
-                  const dr = rr - near[k].r;
-                  const ds = slots[i] - near[k].slot;
-                  if (2 * dr * dr + ds * ds <= GROUP_REACH) { extra += 1; break; }
-                }
-              }
-            }
-          }
-          const group = 1 + near.length + extra;
-          let score = group * 12;
-          if (group > MATCH) score += 48;
-          else if (group === MATCH) score += 16;
-          if (land <= -END) score -= 240;
-          else if (land <= -END + 3) score -= 40;
-          score += (row.rw - row.lw) * 1.6;
-          for (let i = 0; i < state.flyers.length; i++) {
-            if (state.flyers[i].row === r && state.flyers[i].side === 0) score -= 10;
-          }
-          score += (Math.random() - 0.5) * 5;
+          if (y < state.wallTop + state.pitch || y > state.wallBot - state.pitch) score -= 20;
+          score += (Math.random() - 0.5) * 4;
           if (score > bestScore) {
             bestScore = score;
-            best = r;
+            bestY = y;
           }
         }
-        shoot(best, 0);
+        shoot(bestY, 0);
         state.pcWait = PC_GAP + Math.random() * 0.9;
       } else state.pcWait = 0.4;
     }
   }
   if (state.mode === "over") return;
   state.phaseT += dt;
-  let arrived = false;
-  for (let i = state.flyers.length - 1; i >= 0; i--) {
+
+  const pitch = state.pitch;
+  const rest = pitch;
+  const core = pitch * 0.78;
+  const sub = dt / SUBSTEPS;
+  const bodies = [];
+  for (let i = 0; i < state.discs.length; i++) bodies.push(state.discs[i]);
+  for (let step = 0; step < SUBSTEPS; step++) {
+    let cx = 0;
+    let cy = 0;
+    let cn = 0;
+    for (let i = 0; i < state.discs.length; i++) {
+      cx += state.discs[i].x;
+      cy += state.discs[i].y;
+      cn += 1;
+    }
+    if (cn) {
+      cx /= cn;
+      cy /= cn;
+    }
+    for (let i = 0; i < bodies.length; i++) {
+      const a = bodies[i];
+      if (cn && a.color !== undefined) {
+        const pull = a.color < 0 ? 9 : 4.5;
+        a.vx += (cx - a.x) * pull * sub;
+        a.vy += (cy - a.y) * pull * sub;
+      }
+      const topGap = a.y - state.wallTop;
+      if (topGap < state.wallBand) {
+        const dwall = Math.max(0.35, topGap);
+        a.vy += (state.wallBand / (dwall * dwall)) * 70 * sub;
+      }
+      const botGap = state.wallBot - a.y;
+      if (botGap < state.wallBand) {
+        const dwall = Math.max(0.35, botGap);
+        a.vy -= (state.wallBand / (dwall * dwall)) * 70 * sub;
+      }
+      for (let j = i + 1; j < bodies.length; j++) {
+        const b = bodies[j];
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let d2 = dx * dx + dy * dy;
+        if (d2 < 0.04) {
+          dx = 0.2;
+          dy = 0;
+          d2 = 0.04;
+        }
+        const d = Math.sqrt(d2);
+        const like = a.color >= 0 && a.color === b.color;
+        const cut = like ? rest * 2.3 : rest * 1.75;
+        if (d >= cut) continue;
+        let f = 0;
+        if (d < rest) f = (rest - d) * (d < core ? 520 : 240);
+        else {
+          const u = (d - rest) / (cut - rest);
+          const depth = like ? 90 : 16;
+          f = -depth * u * (1 - u) * 4;
+        }
+        const nx = dx / d;
+        const ny = dy / d;
+        a.vx -= f * nx * sub;
+        a.vy -= f * ny * sub;
+        b.vx += f * nx * sub;
+        b.vy += f * ny * sub;
+      }
+      a.vx *= Math.exp(-5.5 * sub);
+      a.vy *= Math.exp(-5.5 * sub);
+      a.x += a.vx * sub;
+      a.y += a.vy * sub;
+      if (a.y < state.wallTop + state.discR * 0.35) {
+        a.y = state.wallTop + state.discR * 0.35;
+        if (a.vy < 0) a.vy = 0;
+      }
+      if (a.y > state.wallBot - state.discR * 0.35) {
+        a.y = state.wallBot - state.discR * 0.35;
+        if (a.vy > 0) a.vy = 0;
+      }
+      const cap = pitch * 14;
+      const sp = Math.sqrt(a.vx * a.vx + a.vy * a.vy);
+      if (sp > cap) {
+        a.vx = a.vx / sp * cap;
+        a.vy = a.vy / sp * cap;
+      }
+    }
+    for (let i = 0; i < bodies.length; i++) {
+      const a = bodies[i];
+      for (let j = i + 1; j < bodies.length; j++) {
+        const b = bodies[j];
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let d2 = dx * dx + dy * dy;
+        if (d2 >= core * core || d2 < 0.0001) continue;
+        const d = Math.sqrt(d2);
+        const push = (core - d) * 0.5 / d;
+        a.x -= dx * push;
+        a.y -= dy * push;
+        b.x += dx * push;
+        b.y += dy * push;
+      }
+    }
+  }
+
+  let cx = 0;
+  let cy = 0;
+  let cn = 0;
+  for (let i = 0; i < state.discs.length; i++) {
+    cx += state.discs[i].x;
+    cy += state.discs[i].y;
+    cn += 1;
+  }
+  if (cn) {
+    cx /= cn;
+    cy /= cn;
+  }
+  for (let i = 0; i < state.flyers.length; i++) {
     const shot = state.flyers[i];
     const c = shot.cell;
     shot.t += dt;
-    c.tx = contactX(shot.row, shot.side);
-    c.ty = rowY(shot.row);
-    c.vx += ((c.tx - c.x) * 70 - c.vx * 8) * dt;
-    c.x += c.vx * dt;
-    c.y += (c.ty - c.y) * Math.min(1, dt * 14);
-    const home = shot.side === 0 ? c.x >= c.tx - 1 : c.x <= c.tx + 1;
-    if (!home && shot.t <= 0.7) continue;
-    c.x = c.tx;
-    c.vx = shot.side === 0 ? state.pitch * 4 : -state.pitch * 4;
-    c.by = shot.side;
-    if (shot.side === 0) state.rows[shot.row].cells.unshift(c);
-    else state.rows[shot.row].cells.push(c);
-    state.flyers.splice(i, 1);
-    arrived = true;
-  }
-  if (arrived) {
-    layoutTargets();
-    if (state.phase !== "pop" && state.phase !== "mark") {
-      state.phase = "settle";
-      state.phaseT = 0;
-    }
-  }
-  if (state.phase === "mark" && state.phaseT >= MARK_TIME) afterSettle();
-  if (state.phase === "pop") {
-    for (let i = state.poppers.length - 1; i >= 0; i--) {
-      const pop = state.poppers[i];
-      pop.t += dt;
-      const u = Math.min(1, pop.t / POP_TIME);
-      const e = u * u * (3 - 2 * u);
-      pop.x = pop.x0 + (pop.edge - pop.x0) * e;
-      pop.sc = 1;
-      pop.alpha = 1 - e;
-      if (pop.t >= POP_TIME) state.poppers.splice(i, 1);
-    }
-  }
-  if (state.phase === "settle" || state.phase === "pop") {
-    let calm = state.flyers.length === 0 && state.poppers.length === 0;
-    const k = 78;
-    const damp = 9.5;
-    for (let r = 0; r < ROWS; r++) {
-      const cells = state.rows[r].cells;
-      for (let i = 0; i < cells.length; i++) {
-        const c = cells[i];
-        c.vx += ((c.tx - c.x) * k - c.vx * damp) * dt;
-        c.vy += ((c.ty - c.y) * k - c.vy * damp) * dt;
-        c.x += c.vx * dt;
-        c.y += c.vy * dt;
-        if (Math.abs(c.tx - c.x) > 1.4 || Math.abs(c.vx) > 36) calm = false;
+    const burn = shot.t < BURN ? 1 - shot.t / BURN : 0;
+    c.vx += shot.dir * pitch * 140 * burn * burn * burn * dt;
+    if (cn) {
+      const dx = cx - c.x;
+      const dy = cy - c.y;
+      const r2 = dx * dx + dy * dy;
+      const soft = pitch * pitch;
+      const pull = (pitch * pitch * pitch * 240) / (r2 + soft);
+      const r = Math.sqrt(r2);
+      if (r > 0.001) {
+        c.vx += pull * dx / r * dt;
+        c.vy += pull * dy / r * dt;
       }
     }
-    const popped = state.phase === "pop" && state.poppers.length === 0;
-    const settled = state.phase === "settle" && ((calm && state.phaseT >= SETTLE_MIN) || (state.flyers.length === 0 && state.phaseT >= SETTLE_MAX));
-    if (popped && calm) afterSettle();
-    else if (settled) afterSettle();
+    c.vx *= Math.exp(-2.4 * dt);
+    c.vy *= Math.exp(-1.1 * dt);
+    c.x += c.vx * dt;
+    c.y += c.vy * dt;
+    if (c.y < state.wallTop + state.discR * 0.35) {
+      c.y = state.wallTop + state.discR * 0.35;
+      if (c.vy < 0) c.vy = 0;
+    }
+    if (c.y > state.wallBot - state.discR * 0.35) {
+      c.y = state.wallBot - state.discR * 0.35;
+      if (c.vy > 0) c.vy = 0;
+    }
+  }
+
+  for (let i = state.flyers.length - 1; i >= 0; i--) {
+    const shot = state.flyers[i];
+    const c = shot.cell;
+    let hit = false;
+    for (let k = 0; k < state.discs.length; k++) {
+      const dx = c.x - state.discs[k].x;
+      const dy = c.y - state.discs[k].y;
+      if (dx * dx + dy * dy <= rest * rest) { hit = true; break; }
+    }
+    if (!hit) continue;
+    c.by = shot.side;
+    state.discs.push(c);
+    state.flyers.splice(i, 1);
+  }
+  for (let i = state.poppers.length - 1; i >= 0; i--) {
+    const pop = state.poppers[i];
+    pop.t += dt;
+    pop.x += pop.vx * dt;
+    pop.y += pop.vy * dt;
+    const u = Math.min(1, pop.t / POP_TIME);
+    pop.sc = 1;
+    pop.alpha = 1 - u;
+    if (pop.t >= POP_TIME) state.poppers.splice(i, 1);
+  }
+  findColorGroups();
+  const slow = pitch * 0.35;
+  const groups = state.colorGroups || [];
+  for (let i = 0; i < state.discs.length; i++) {
+    const disc = state.discs[i];
+    if (disc.by < 0 || disc.checked || disc.mark) continue;
+    if (Math.sqrt(disc.vx * disc.vx + disc.vy * disc.vy) > slow) continue;
+    let group = null;
+    for (let g = 0; g < groups.length; g++) {
+      const discs = groups[g].discs;
+      for (let k = 0; k < discs.length; k++) {
+        if (discs[k] === disc) { group = groups[g]; break; }
+      }
+      if (group) break;
+    }
+    if (!group) {
+      disc.checked = true;
+      continue;
+    }
+    let wait = false;
+    for (let k = 0; k < group.discs.length; k++) {
+      const other = group.discs[k];
+      if (other === disc || other.by < 0 || other.checked || other.mark) continue;
+      if (Math.sqrt(other.vx * other.vx + other.vy * other.vy) > slow) { wait = true; break; }
+    }
+    if (wait) continue;
+    for (let k = 0; k < group.discs.length; k++) {
+      if (group.discs[k].by >= 0) group.discs[k].checked = true;
+    }
+    if (group.discs.length <= MATCH) continue;
+    let left = false;
+    let right = false;
+    for (let k = 0; k < group.discs.length; k++) {
+      const by = group.discs[k].by;
+      if (by === 0) left = true;
+      if (by === 1) right = true;
+    }
+    if (!left && !right) continue;
+    const leftN = left ? group.discs.length : 0;
+    const rightN = right ? group.discs.length : 0;
+    for (let k = 0; k < group.discs.length; k++) group.discs[k].mark = true;
+    state.holds.push({ discs: group.discs.slice(), t: 0, left: left, right: right, leftN: leftN, rightN: rightN });
+  }
+  for (let h = state.holds.length - 1; h >= 0; h--) {
+    const hold = state.holds[h];
+    hold.t += dt;
+    if (hold.t < MARK_TIME) continue;
+    const doomed = hold.discs;
+    const keep = [];
+    for (let i = 0; i < state.discs.length; i++) {
+      let drop = false;
+      for (let d = 0; d < doomed.length; d++) {
+        if (state.discs[i] === doomed[d]) { drop = true; break; }
+      }
+      if (!drop) keep.push(state.discs[i]);
+    }
+    state.discs = keep;
+    const reach = pitch * 2.4;
+    const boost = doomed.length / 4 * pitch * 16;
+    for (let d = 0; d < doomed.length; d++) {
+      const cell = doomed[d];
+      cell.mark = false;
+      let exit = 0;
+      if (hold.left && !hold.right) exit = -1;
+      else if (hold.right && !hold.left) exit = 1;
+      else exit = cell.x < state.wellX ? -1 : 1;
+      for (let i = 0; i < keep.length; i++) {
+        const other = keep[i];
+        const dx = other.x - cell.x;
+        const dy = other.y - cell.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > reach) continue;
+        const w = 1 - dist / reach;
+        other.vx -= exit * boost * w;
+      }
+      state.poppers.push({
+        color: cell.color,
+        x: cell.x,
+        y: cell.y,
+        vx: exit * boost * 0.7,
+        vy: (cell.y - state.wellY) * 0.2,
+        t: 0,
+        sc: 1,
+        alpha: 1
+      });
+    }
+    const parts = [];
+    if (hold.leftN) parts.push("LEFT +" + hold.leftN);
+    if (hold.rightN) parts.push("RIGHT +" + hold.rightN);
+    state.bigText = parts.join("  ");
+    state.bigT = 1.8;
+    state.holds.splice(h, 1);
+  }
+  if (state.mode === "play") {
+    state.grow -= dt;
+    if (state.grow <= 0) {
+      const born = makeDisc(takeBoardColor(), state.wellX, state.wellY);
+      const reach = pitch * 1.6;
+      for (let i = 0; i < state.discs.length; i++) {
+        const other = state.discs[i];
+        const dx = other.x - born.x;
+        const dy = other.y - born.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 0.001 || dist > reach) continue;
+        const w = (reach - dist) / reach;
+        const push = pitch * 7 * w;
+        other.vx += dx / dist * push;
+        other.vy += dy / dist * push;
+      }
+      state.discs.push(born);
+      let colors = 0;
+      for (let i = 0; i < state.discs.length; i++) {
+        if (state.discs[i].color >= 0) colors += 1;
+      }
+      if (colors < BOARD_NOMINAL) state.growWait *= GROW_FAST;
+      else if (colors > BOARD_NOMINAL) state.growWait *= GROW_SLOW;
+      if (state.growWait < GROW_MIN) state.growWait = GROW_MIN;
+      if (state.growWait > GROW_MAX) state.growWait = GROW_MAX;
+      state.grow = state.growWait;
+    }
+  }
+  const loss = edgeLoss();
+  if (loss.left || loss.right) {
+    state.mode = "over";
+    state.phase = "idle";
+    state.loser = loss.left && loss.right ? 2 : (loss.left ? 0 : 1);
+  }
+  if (state.discs.length) {
+    let sx = 0;
+    let sy = 0;
+    for (let i = 0; i < state.discs.length; i++) {
+      sx += state.discs[i].x;
+      sy += state.discs[i].y;
+    }
+    state.wellX = sx / state.discs.length;
+    state.wellY = sy / state.discs.length;
   }
 }
 
 function pcButton() {
   const r = Math.max(16, state.h * 0.035);
-  return { x: r+8, y: state.h - r - 8, r: r };
+  return { x: r + 8, y: state.h - r - 8, r: r };
 }
 
 function togglePc() {
@@ -511,15 +629,13 @@ function onPoint(x, y) {
     newGame();
     return false;
   }
-  const row = rowAt(y);
-  if (row < 0) return false;
-  if (x === state.wellX) return false;
-  if (x < state.wellX) {
+  if (x === state.w * 0.5) return false;
+  if (x < state.w * 0.5) {
     if (state.pcLeft) return false;
-    shoot(row, 0);
+    shoot(y, 0);
     return false;
   }
-  shoot(row, 1);
+  shoot(y, 1);
   return false;
 }
 
@@ -532,8 +648,13 @@ function bindInput() {
     }
     if (state.mode !== "title") return;
     requestPageFullscreen();
+    state.armGame = true;
     resize();
-    newGame();
+    setTimeout(function () {
+      if (!state.armGame) return;
+      resize();
+      newGame();
+    }, 420);
   });
   canvas.addEventListener("pointerdown", function (ev) {
     const r = canvas.getBoundingClientRect();
@@ -548,17 +669,33 @@ function bindInput() {
     }
     if (state.mode === "title" && (ev.code === "Space" || ev.code === "Enter")) {
       requestPageFullscreen();
+      state.armGame = true;
       resize();
-      newGame();
+      setTimeout(function () {
+        if (!state.armGame) return;
+        resize();
+        newGame();
+      }, 420);
       return;
     }
     if (state.pcLeft) return;
     const n = ev.keyCode >= 49 && ev.keyCode <= 54 ? ev.keyCode - 49 : -1;
-    if (n >= 0) shoot(n, 0);
+    if (n >= 0) {
+      const y = state.wallTop + (n + 0.5) * (state.wallBot - state.wallTop) / 6;
+      shoot(y, 0);
+    }
   });
   window.addEventListener("resize", resize);
-  document.addEventListener("fullscreenchange", resize);
-  document.addEventListener("webkitfullscreenchange", resize);
+  document.addEventListener("fullscreenchange", function () {
+    resize();
+    if (!state.armGame) return;
+    newGame();
+  });
+  document.addEventListener("webkitfullscreenchange", function () {
+    resize();
+    if (!state.armGame) return;
+    newGame();
+  });
 }
 
 function frame(now) {

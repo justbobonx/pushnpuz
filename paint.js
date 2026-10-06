@@ -1,10 +1,8 @@
 /*
-  Paint. Discs, links, hand, and the award line.
+  Paint. Discs, links, hands, walls.
+  Blacks are #111 with a grey edge. They are not a color.
+  Long-side bands are the short-range walls. End lines are the players.
   bigText / bigT is the player award. Nothing else owns that line.
-  Poppers are discs that have left the pack and are bursting out.
-  Depth is a grey fill per grid slot. The cells touching the weight target are #111111.
-  Each slot outward adds #020202. The fill uses lw - rw, not the springing marker, so the pop overshoot does not walk the band.
-  Grid lines stay on top of the fill. No inset.
 */
 
 const COLS = [
@@ -16,6 +14,8 @@ const COLS = [
 ];
 const BG = "#07080d";
 const PCOL = ["#ff9f1a", "#3aa0ff"];
+const BLACK_FILL = "#111111";
+const BLACK_EDGE = "#8d939c";
 
 function mixHex(a, b, t) {
   const pa = parseInt(a.slice(1), 16);
@@ -29,8 +29,9 @@ function mixHex(a, b, t) {
 function drawDisc(x, y, r, ci, alpha, sc, shine, ring, noShadow) {
   if (sc <= 0.02 || alpha <= 0.02) return;
   const rr = r * sc;
-  const c = COLS[ci];
-  const edge = ring || mixHex(c.fill, c.hi, 0.5);
+  const black = ci < 0;
+  const c = black ? null : COLS[ci];
+  const edge = ring || (black ? BLACK_EDGE : mixHex(c.fill, c.hi, 0.5));
   const outline = Math.max(1.6, rr * 0.11);
   ctx.save();
   ctx.translate(x, y);
@@ -44,12 +45,21 @@ function drawDisc(x, y, r, ci, alpha, sc, shine, ring, noShadow) {
   ctx.globalAlpha = alpha;
   ctx.beginPath();
   ctx.arc(0, 0, rr, 0, Math.PI * 2);
-  ctx.fillStyle = c.fill;
+  ctx.fillStyle = black ? BLACK_FILL : c.fill;
   ctx.fill();
   ctx.lineWidth = outline;
   ctx.strokeStyle = edge;
   ctx.stroke();
-  if (shine) {
+  if (black) {
+    ctx.beginPath();
+    ctx.arc(-rr * 0.2, -rr * 0.28, rr * 0.34, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(196, 200, 206, 0.9)";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(rr * 0.28, rr * 0.32, rr * 0.1, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(176, 180, 186, 0.8)";
+    ctx.fill();
+  } else if (shine) {
     ctx.beginPath();
     ctx.arc(0, 0, rr * 0.72, Math.PI * 1.08, Math.PI * 1.78);
     ctx.strokeStyle = "rgba(255,255,255,0.78)";
@@ -67,8 +77,8 @@ function drawColorLinks() {
   ctx.lineWidth = Math.max(2.4, state.discR * 0.34);
   for (let n = 0; n < links.length; n++) {
     const link = links[n];
-    const ca = link.a.cell;
-    const cb = link.b.cell;
+    const ca = link.a;
+    const cb = link.b;
     if (!ca || !cb) continue;
     const hot = ca.mark && cb.mark;
     const col = COLS[link.color];
@@ -85,7 +95,7 @@ function queueSlot(p, i) {
   const r = state.discR;
   const pad = state.pitch * 0.22;
   const x = p === 0 ? state.boardLeft - r - pad : state.boardRight + r + pad;
-  const nextY = state.boardTop + state.pitch * ROWS * 0.5;
+  const nextY = state.h * 0.5;
   const gap = state.pitch * 0.78;
   const split = state.pitch * 0.42;
   const y = i === 0 ? nextY : nextY - split - i * gap;
@@ -151,104 +161,42 @@ function draw() {
   }
 
   ctx.save();
-  ctx.beginPath();
-  ctx.rect(state.boardLeft, state.boardTop, state.boardRight - state.boardLeft, state.pitch * ROWS);
-  ctx.clip();
-  for (let r = 0; r < ROWS; r++) {
-    const target = state.rows[r].lw - state.rows[r].rw;
-    const y = state.boardTop + r * state.pitch;
-    const leftEdge = Math.floor(target);
-    const rightEdge = Math.ceil(target);
-    for (let s = -END; s < END; s++) {
-      let steps = 0;
-      if (s + 1 <= leftEdge) steps = leftEdge - (s + 1);
-      else if (s >= rightEdge) steps = s - rightEdge;
-      const v = Math.min(255, 0x11 + steps * 2);
-      ctx.fillStyle = "rgb(" + v + "," + v + "," + v + ")";
-      ctx.fillRect(state.wellX + s * state.half, y, state.half, state.pitch);
-    }
-  }
-  ctx.restore();
-
-  ctx.save();
-  const gridBottom = state.boardTop + state.pitch * ROWS;
+  ctx.fillStyle = "rgba(20, 24, 32, 0.9)";
+  ctx.fillRect(state.boardLeft, 0, state.boardRight - state.boardLeft, state.wallTop + state.wallBand);
+  ctx.fillRect(state.boardLeft, state.wallBot - state.wallBand, state.boardRight - state.boardLeft, state.h - (state.wallBot - state.wallBand));
+  ctx.strokeStyle = "rgba(190, 206, 220, 0.28)";
   ctx.lineWidth = 1;
-  ctx.strokeStyle = "rgba(190, 206, 220, 0.28)";
+  ctx.strokeRect(state.boardLeft, state.wallTop, state.boardRight - state.boardLeft, state.wallBot - state.wallTop);
+  ctx.restore();
+
+  ctx.save();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = PCOL[0];
+  ctx.globalAlpha = state.mode === "play" ? 0.95 : 0.28;
   ctx.beginPath();
-  for (let i = 0; i <= ROWS; i++) {
-    const y = state.boardTop + i * state.pitch;
-    ctx.moveTo(state.boardLeft, y);
-    ctx.lineTo(state.boardRight, y);
-  }
-  for (let s = -END + (END % 2); s <= END; s += 2) {
-    const x = state.wellX + s * state.half;
-    ctx.moveTo(x, state.boardTop);
-    ctx.lineTo(x, gridBottom);
-  }
+  ctx.moveTo(state.boardLeft, state.wallTop);
+  ctx.lineTo(state.boardLeft, state.wallBot);
   ctx.stroke();
-  ctx.strokeStyle = "rgba(190, 206, 220, 0.28)";
+  ctx.strokeStyle = PCOL[1];
   ctx.beginPath();
-  for (let s = -END + ((END + 1) % 2); s <= END; s += 2) {
-    const x = state.wellX + s * state.half;
-    ctx.moveTo(x, state.boardTop);
-    ctx.lineTo(x, gridBottom);
-  }
-  ctx.stroke();
-  ctx.strokeStyle = "rgba(190, 206, 220, 0.4)";
-  ctx.beginPath();
-  ctx.moveTo(state.boardLeft, state.boardTop);
-  ctx.lineTo(state.boardLeft, gridBottom);
-  ctx.moveTo(state.boardRight, state.boardTop);
-  ctx.lineTo(state.boardRight, gridBottom);
-  ctx.stroke();
-  ctx.strokeStyle = "rgba(190, 206, 220, 0.28)";
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.moveTo(state.wellX, state.boardTop);
-  ctx.lineTo(state.wellX, gridBottom);
+  ctx.moveTo(state.boardRight, state.wallTop);
+  ctx.lineTo(state.boardRight, state.wallBot);
   ctx.stroke();
   ctx.restore();
 
   ctx.save();
-  ctx.strokeStyle = "rgba(255, 226, 140, 0.9)";
-  ctx.lineWidth = 3;
-  ctx.lineCap = "butt";
-  for (let r = 0; r < ROWS; r++) {
-    const row = state.rows[r];
-    let x = state.wellX + row.bal * state.half;
-    if (x < state.boardLeft) x = state.boardLeft;
-    if (x > state.boardRight) x = state.boardRight;
-    const y0 = state.boardTop + r * state.pitch;
-    ctx.beginPath();
-    ctx.moveTo(x, y0);
-    ctx.lineTo(x, y0 + state.pitch);
-    ctx.stroke();
-  }
+  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(state.wellX, state.wellY, Math.max(3, state.discR * 0.18), 0, Math.PI * 2);
+  ctx.stroke();
   ctx.restore();
 
-  for (let r = 0; r < ROWS; r++) {
-    const row = state.rows[r];
-    const y = rowY(r);
-    const net = row.lw - row.rw;
-    ctx.save();
-    ctx.globalAlpha = 0.55;
-    if (net > 0) {
-      ctx.fillStyle = PCOL[0];
-      ctx.fillRect(state.boardLeft, y - 2, Math.min(state.half * net, state.boardRight - state.boardLeft), 3);
-    } else if (net < 0) {
-      ctx.fillStyle = PCOL[1];
-      const span = Math.min(state.half * -net, state.boardRight - state.boardLeft);
-      ctx.fillRect(state.boardRight - span, y - 2, span, 3);
-    }
-    ctx.restore();
-  }
   drawColorLinks();
-  for (let r = 0; r < ROWS; r++) {
-    const row = state.rows[r];
-    for (let i = 0; i < row.cells.length; i++) {
-      const c = row.cells[i];
-      drawDisc(c.x, c.y, state.discR, c.color, 1, 1, true, c.mark ? "#ffffff" : "");
-    }
+  const discs = state.discs || [];
+  for (let i = 0; i < discs.length; i++) {
+    const c = discs[i];
+    drawDisc(c.x, c.y, state.discR, c.color, 1, 1, c.color >= 0, c.mark ? "#ffffff" : "");
   }
   for (let i = 0; i < state.flyers.length; i++) {
     const c = state.flyers[i].cell;
@@ -259,16 +207,6 @@ function draw() {
     const pop = poppers[i];
     drawDisc(pop.x, pop.y, state.discR, pop.color, pop.alpha, pop.sc, false, "", true);
   }
-
-  ctx.save();
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = PCOL[0];
-  ctx.globalAlpha = state.mode === "play" ? 0.95 : 0.28;
-  ctx.strokeRect(state.boardLeft - 2, state.boardTop, 4, state.pitch * ROWS);
-  ctx.strokeStyle = PCOL[1];
-  ctx.globalAlpha = state.mode === "play" ? 0.95 : 0.28;
-  ctx.strokeRect(state.boardRight - 2, state.boardTop, 4, state.pitch * ROWS);
-  ctx.restore();
 
   drawQueue(0);
   drawQueue(1);
@@ -281,11 +219,11 @@ function draw() {
   ctx.font = "600 " + small + "px ui-sans-serif, system-ui, sans-serif";
   if (state.mode === "over") {
     const msg = state.loser === 2 ? "BOTH OUT" : (state.loser === 0 ? "LEFT OUT" : "RIGHT OUT");
-    ctx.fillText(msg, state.w * 0.5, state.boardTop - small * 0.9);
+    ctx.fillText(msg, state.w * 0.5, Math.max(small, state.wallTop * 0.5));
     ctx.font = "400 " + (small * 0.72) + "px ui-sans-serif, system-ui, sans-serif";
-    ctx.fillText("tap to restart", state.w * 0.5, state.boardTop + state.pitch * ROWS + small);
+    ctx.fillText("tap to restart", state.w * 0.5, state.wallBot + (state.h - state.wallBot) * 0.45);
   } else if (state.bigText && state.bigT > 0) {
-    const labelY = Math.max(small * 0.7, state.boardTop * 0.28);
+    const labelY = Math.max(small * 0.7, state.wallTop * 0.45);
     ctx.fillText(state.bigText, state.w * 0.5, labelY);
   }
   ctx.restore();
