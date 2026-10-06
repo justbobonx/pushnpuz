@@ -1,7 +1,7 @@
 /*
   Paint. Discs, links, hands, walls.
   Blacks are #111 with a grey edge. They are not a color.
-  Long-side bands are the short-range walls. End lines are the players.
+  Long sides repel, but they are not drawn. End lines are the players.
   bigText / bigT is the player award. Nothing else owns that line.
 */
 
@@ -161,15 +161,6 @@ function draw() {
   }
 
   ctx.save();
-  ctx.fillStyle = "rgba(20, 24, 32, 0.9)";
-  ctx.fillRect(state.boardLeft, 0, state.boardRight - state.boardLeft, state.wallTop + state.wallBand);
-  ctx.fillRect(state.boardLeft, state.wallBot - state.wallBand, state.boardRight - state.boardLeft, state.h - (state.wallBot - state.wallBand));
-  ctx.strokeStyle = "rgba(190, 206, 220, 0.28)";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(state.boardLeft, state.wallTop, state.boardRight - state.boardLeft, state.wallBot - state.wallTop);
-  ctx.restore();
-
-  ctx.save();
   ctx.lineWidth = 3;
   ctx.strokeStyle = PCOL[0];
   ctx.globalAlpha = state.mode === "play" ? 0.95 : 0.28;
@@ -245,5 +236,16 @@ function drawPcButton() {
   ctx.fillStyle = on ? "#1a1206" : "rgba(215, 236, 255, 0.7)";
   ctx.font = "700 " + Math.max(11, b.r * 0.62) + "px ui-sans-serif, system-ui, sans-serif";
   ctx.fillText("PC", b.x, b.y + 1);
+  if (on) {
+    const panic = state.pcPanic || 0;
+    const x = b.x + b.r + 8;
+    const w = b.r * 2.6;
+    const h = Math.max(4, b.r * 0.28);
+    const y = b.y - h * 0.5;
+    ctx.fillStyle = "rgba(215, 236, 255, 0.18)";
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = PCOL[0];
+    ctx.fillRect(x, y, w * panic, h);
+  }
   ctx.restore();
 }

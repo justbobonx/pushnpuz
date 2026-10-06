@@ -1,13 +1,15 @@
 /*
   PUSH & PUZ
   First cut without slots or rows. Shots are free along your end.
-  A black column sits on the center line at the old slot spacing, one pitch,
-  spanning the corridor so a shot cannot reach the other side.
-  Every pair has a well at that spacing: repel inside, pull outside, flat past a cutoff.
-  Like colors pull harder and link. Blacks pull each other like a color, and pull
-  every disc more weakly and farther. They do not match.
+  Three blacks float near the bunch center and hold a soft triangle.
+  They do not match. Colored discs do not stick to them.
+  Every pair has a well: repel inside, pull outside, flat past a cutoff.
+  Like colors pull harder and link. The blob is in water: strong drag,
+  soft wells, so a shove becomes a drift instead of a bounce.
   A weak pull toward the bunch center keeps the cloud together. It does not pin it.
-  Shots stay straight. A bunch farther than center keeps its burn longer.
+  Blacks pull that center a little harder so the triangle stays with the mob.
+  A match adds a current on the mob. A 4-match is one unit. Bigger matches add more. The current decays over a few seconds.
+  Shots stay straight until they join. A bunch farther than center keeps its burn longer.
   Long sides repel to infinity inside a short band. Ends stay open.
 */
 
@@ -41,9 +43,9 @@ const state = {
   loser: -1, last: 0, flyers: [], poppers: [],
   colorLinks: [], colorGroups: [],
   qSlide: [0, 0], refill: [0, 0],
-  pcLeft: false, pcWait: PC_GAP,
+  pcLeft: false, pcWait: PC_GAP, pcPanic: 0.5,
   boardLeft: 0, boardRight: 0, wallTop: 0, wallBot: 0, wallBand: 0,
-  pitch: 0, half: 0, discR: 0, wellX: 0, wellY: 0, armGame: false, grow: GROW, growWait: GROW
+  pitch: 0, half: 0, discR: 0, wellX: 0, wellY: 0, armGame: false, grow: GROW, growWait: GROW, flow: 0
 };
 
 function shuffle(list) {
@@ -91,10 +93,12 @@ function newGame() {
   const pitch = state.pitch;
   const midX = state.w * 0.5;
   const midY = state.h * 0.5;
+  const outer = state.h * 0.25 - state.discR;
+  const blackR = outer / 3;
   const blacks = [];
-  for (let i = 0; i < 6; i++) {
-    const ang = i * Math.PI / 3 - Math.PI / 2;
-    const disc = makeDisc(BLACK, midX + Math.cos(ang) * pitch, midY + Math.sin(ang) * pitch);
+  for (let i = 0; i < 3; i++) {
+    const ang = i * 2 * Math.PI / 3 - Math.PI / 2;
+    const disc = makeDisc(BLACK, midX + Math.cos(ang) * blackR, midY + Math.sin(ang) * blackR);
     disc.by = -2;
     blacks.push(disc);
   }
@@ -104,12 +108,13 @@ function newGame() {
   dealHand(0);
   dealHand(1);
   const colored = [];
-  const shells = [2, 3];
+  const shells = [outer * 2 / 3, outer];
+  const step = outer / 3;
   for (let attempt = 0; attempt < 24; attempt++) {
     colored.length = 0;
     for (let s = 0; s < shells.length; s++) {
-      const rad = shells[s] * pitch;
-      const n = Math.max(6, Math.round(2 * Math.PI * rad / pitch));
+      const rad = shells[s];
+      const n = Math.max(6, Math.round(2 * Math.PI * rad / Math.max(step, state.discR * 2.2)));
       const spin = s * Math.PI / n;
       for (let i = 0; i < n; i++) {
         const ang = spin + i * 2 * Math.PI / n;
@@ -146,6 +151,7 @@ function newGame() {
   state.armGame = false;
   state.grow = GROW;
   state.growWait = GROW;
+  state.flow = 0;
   findColorGroups();
 }
 
@@ -274,33 +280,46 @@ function update(dt) {
     }
   }
   if (state.pcLeft && state.mode === "play") {
+    const span = Math.max(1, state.boardRight - state.boardLeft);
+    let edge = state.boardRight;
+    const discs = state.discs;
+    for (let i = 0; i < discs.length; i++) {
+      if (discs[i].color < 0) continue;
+      if (discs[i].x < edge) edge = discs[i].x;
+    }
+    let panic = (state.boardRight - state.wellX) / span * 0.7 + (state.boardRight - edge) / span * 0.3;
+    if (panic < 0) panic = 0;
+    if (panic > 1) panic = 1;
+    state.pcPanic = panic;
     state.pcWait -= dt;
     if (state.pcWait <= 0) {
       if (state.bags[0].length) {
         const color = state.bags[0][0].color;
-        let bestY = state.h * 0.5;
+        let bestY = state.wellY;
         let bestScore = -1e9;
-        const samples = 9;
+        const samples = 11;
         for (let s = 0; s < samples; s++) {
           const y = state.wallTop + (s + 0.5) * (state.wallBot - state.wallTop) / samples;
-          let score = 0;
-          const discs = state.discs;
+          let score = -Math.abs(y - state.wellY) / state.pitch * (0.6 + panic * 2.4);
           for (let i = 0; i < discs.length; i++) {
             if (discs[i].color !== color) continue;
             const dy = discs[i].y - y;
-            const dx = discs[i].x - (state.boardLeft + state.pitch);
+            const dx = discs[i].x - state.boardLeft;
             const d2 = dx * dx + dy * dy;
-            if (d2 < state.pitch * state.pitch * 6) score += 14;
+            if (d2 >= state.pitch * state.pitch * 8) continue;
+            const onHim = 1 - Math.min(1, Math.max(0, dx / span));
+            score += 10 + onHim * 16;
           }
           if (y < state.wallTop + state.pitch || y > state.wallBot - state.pitch) score -= 20;
-          score += (Math.random() - 0.5) * 4;
+          score += (Math.random() - 0.5) * (2.4 - panic * 1.4);
           if (score > bestScore) {
             bestScore = score;
             bestY = y;
           }
         }
         shoot(bestY, 0);
-        state.pcWait = PC_GAP + Math.random() * 0.9;
+        const gap = 4.4 + (0.9 - 4.4) * panic;
+        state.pcWait = gap * (0.85 + Math.random() * 0.3);
       } else state.pcWait = 0.4;
     }
   }
@@ -329,9 +348,10 @@ function update(dt) {
     for (let i = 0; i < bodies.length; i++) {
       const a = bodies[i];
       if (cn && a.color !== undefined) {
-        const pull = a.color < 0 ? 9 : 4.5;
+        const pull = a.color < 0 ? 7.3 : 3.1;
         a.vx += (cx - a.x) * pull * sub;
         a.vy += (cy - a.y) * pull * sub;
+        a.vx += state.flow * pitch * 1.25 * sub;
       }
       const topGap = a.y - state.wallTop;
       if (topGap < state.wallBand) {
@@ -355,13 +375,18 @@ function update(dt) {
         }
         const d = Math.sqrt(d2);
         const like = a.color >= 0 && a.color === b.color;
-        const cut = like ? rest * 2.3 : rest * 1.75;
+        const bothBlack = a.color < 0 && b.color < 0;
+        const blackColor = (a.color < 0) !== (b.color < 0);
+        const pairRest = bothBlack ? rest * 1.42 : rest;
+        const cut = bothBlack ? rest * 2.7 : like ? rest * 2.3 : blackColor ? rest * 1.25 : rest * 1.75;
         if (d >= cut) continue;
         let f = 0;
-        if (d < rest) f = (rest - d) * (d < core ? 520 : 240);
-        else {
-          const u = (d - rest) / (cut - rest);
-          const depth = like ? 90 : 16;
+        if (d < pairRest) {
+          const stiff = bothBlack ? 140 : blackColor ? 187 : (d < core ? 307 : 147);
+          f = (pairRest - d) * stiff;
+        } else if (!blackColor) {
+          const u = (d - pairRest) / (cut - pairRest);
+          const depth = bothBlack ? 36 : like ? 58 : 10;
           f = -depth * u * (1 - u) * 4;
         }
         const nx = dx / d;
@@ -371,8 +396,10 @@ function update(dt) {
         b.vx += f * nx * sub;
         b.vy += f * ny * sub;
       }
-      a.vx *= Math.exp(-5.5 * sub);
-      a.vy *= Math.exp(-5.5 * sub);
+      let spd = Math.sqrt(a.vx * a.vx + a.vy * a.vy);
+      const drag = 12.5 + spd * 0.03;
+      a.vx *= Math.exp(-drag * sub);
+      a.vy *= Math.exp(-drag * sub);
       a.x += a.vx * sub;
       a.y += a.vy * sub;
       if (a.y < state.wallTop + state.discR * 0.35) {
@@ -384,10 +411,10 @@ function update(dt) {
         if (a.vy > 0) a.vy = 0;
       }
       const cap = pitch * 14;
-      const sp = Math.sqrt(a.vx * a.vx + a.vy * a.vy);
-      if (sp > cap) {
-        a.vx = a.vx / sp * cap;
-        a.vy = a.vy / sp * cap;
+      spd = Math.sqrt(a.vx * a.vx + a.vy * a.vy);
+      if (spd > cap) {
+        a.vx = a.vx / spd * cap;
+        a.vy = a.vy / spd * cap;
       }
     }
     for (let i = 0; i < bodies.length; i++) {
@@ -534,30 +561,27 @@ function update(dt) {
       if (!drop) keep.push(state.discs[i]);
     }
     state.discs = keep;
-    const reach = pitch * 2.4;
-    const boost = doomed.length / 4 * pitch * 16;
+    let exit = 1;
+    if (hold.left && !hold.right) exit = 1;
+    else if (hold.right && !hold.left) exit = -1;
+    else {
+      let mx = 0;
+      for (let d = 0; d < doomed.length; d++) mx += doomed[d].x;
+      exit = mx / doomed.length < state.wellX ? 1 : -1;
+    }
+    const unit = doomed.length / 4;
+    state.flow += exit * unit;
+    if (state.flow > 4) state.flow = 4;
+    if (state.flow < -4) state.flow = -4;
     for (let d = 0; d < doomed.length; d++) {
       const cell = doomed[d];
       cell.mark = false;
-      let exit = 0;
-      if (hold.left && !hold.right) exit = -1;
-      else if (hold.right && !hold.left) exit = 1;
-      else exit = cell.x < state.wellX ? -1 : 1;
-      for (let i = 0; i < keep.length; i++) {
-        const other = keep[i];
-        const dx = other.x - cell.x;
-        const dy = other.y - cell.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist > reach) continue;
-        const w = 1 - dist / reach;
-        other.vx -= exit * boost * w;
-      }
       state.poppers.push({
         color: cell.color,
         x: cell.x,
         y: cell.y,
-        vx: exit * boost * 0.7,
-        vy: (cell.y - state.wellY) * 0.2,
+        vx: exit * pitch * unit * 0.35,
+        vy: (cell.y - state.wellY) * 0.08,
         t: 0,
         sc: 1,
         alpha: 1
@@ -582,7 +606,7 @@ function update(dt) {
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist < 0.001 || dist > reach) continue;
         const w = (reach - dist) / reach;
-        const push = pitch * 7 * w;
+        const push = pitch * 3.8 * w;
         other.vx += dx / dist * push;
         other.vy += dy / dist * push;
       }
@@ -604,6 +628,7 @@ function update(dt) {
     state.phase = "idle";
     state.loser = loss.left && loss.right ? 2 : (loss.left ? 0 : 1);
   }
+  state.flow *= Math.exp(-0.2 * dt);
   if (state.discs.length) {
     let sx = 0;
     let sy = 0;
