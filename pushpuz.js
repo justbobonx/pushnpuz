@@ -7,6 +7,7 @@
   Like colors pull harder and link. Blacks pull each other like a color, and pull
   every disc more weakly and farther. They do not match.
   A weak pull toward the bunch center keeps the cloud together. It does not pin it.
+  Shots stay straight. A bunch farther than center keeps its burn longer.
   Long sides repel to infinity inside a short band. Ends stay open.
 */
 
@@ -234,9 +235,17 @@ function shoot(y, side) {
   const x0 = side === 0 ? state.boardLeft - state.pitch : state.boardRight + state.pitch;
   const cell = makeDisc(disc.color, x0, y);
   const dir = side === 0 ? 1 : -1;
-  cell.vx = dir * state.pitch * 18;
+  const nominal = Math.abs(state.w * 0.5 - x0);
+  const reach = (state.wellX - x0) * dir;
+  let scale = 1;
+  if (nominal > 1 && reach > state.pitch * 0.35) {
+    scale = reach / nominal;
+    if (scale < 0.45) scale = 0.45;
+    if (scale > 2.4) scale = 2.4;
+  }
+  cell.vx = dir * state.pitch * 18 * scale;
   cell.vy = 0;
-  state.flyers.push({ cell: cell, side: side, t: 0, x0: x0, dir: dir });
+  state.flyers.push({ cell: cell, side: side, t: 0, x0: x0, dir: dir, burnFor: BURN * scale });
   state.refill[side] = REFILL;
   state.qSlide[side] = 1;
   if (state.phase !== "settle" && state.phase !== "pop" && state.phase !== "mark") {
@@ -415,7 +424,8 @@ function update(dt) {
     const shot = state.flyers[i];
     const c = shot.cell;
     shot.t += dt;
-    const burn = shot.t < BURN ? 1 - shot.t / BURN : 0;
+    const burnFor = shot.burnFor || BURN;
+    const burn = shot.t < burnFor ? 1 - shot.t / burnFor : 0;
     c.vx += shot.dir * pitch * 140 * burn * burn * burn * dt;
     if (cn) {
       const dx = cx - c.x;
