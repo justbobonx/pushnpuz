@@ -3,17 +3,17 @@
   Discs sit in a pair well: rest length is the old slot spacing, one pitch.
   Blacks are a column on the center line at that spacing, enough that a shot
   cannot pass between them. They do not match.
-  Like colors link inside a hysteresis band. A group bigger than MATCH that
-  holds a disc from this volley is a match.
+  Like colors link inside a hysteresis band. A group of MATCH or more
+  that holds a live shot is a match. The match stays with that shot.
 */
 
-const MATCH = 3;
+const MATCH = 4;
 const CONNECT = 1.35;
 const BREAK = 1.85;
 const BLACK = -1;
 
 function makeDisc(color, x, y) {
-  return { color: color, x: x, y: y, vx: 0, vy: 0, by: -1, mark: false, checked: false };
+  return { color: color, x: x, y: y, vx: 0, vy: 0, by: -1, mark: false, live: false, settle: 0 };
 }
 
 function findColorGroups() {
@@ -76,7 +76,7 @@ function matchedGroups() {
   const groups = state.colorGroups || [];
   const hit = [];
   for (let g = 0; g < groups.length; g++) {
-    if (groups[g].discs.length > MATCH) hit.push(groups[g]);
+    if (groups[g].discs.length >= MATCH) hit.push(groups[g]);
   }
   return hit;
 }

@@ -9,16 +9,15 @@
   A weak pull toward the bunch center keeps the cloud together. It does not pin it.
   Blacks pull that center a little harder so the triangle stays with the mob.
   A match deposits momentum at the cluster. A 4-match is one unit. Bigger matches add more. Offset from the center becomes spin. Both decay over a few seconds.
+  A shot stays live for its settle window. A color link of MATCH or more lights that group and starts the fuse. The match stays with the owner disc. Links can grow it or cancel it. Another live shot that links in takes it and resets the fuse.
   Shots stay straight until they join. Launch speed covers the distance to the blob center.
   Long sides repel to infinity inside a short band. Ends stay open.
 */
 
 const HAND = 3;
 const BOARD_SETS = 3;
-const SETTLE_MIN = 0.26;
-const SETTLE_MAX = 0.9;
-const POP_TIME = 0.62;
-const MARK_TIME = 0.5;
+const SETTLE = 0.9;
+const MARK_TIME = 0.8;
 const QUEUE_SLIDE = 0.26;
 const REFILL = 0.5;
 const PC_NOMINAL_SPEED = 2.4;
@@ -39,10 +38,10 @@ const APP_VERSION = ((document.getElementById("puz-version") || {}).textContent 
 
 const state = {
   w: 0, h: 0, viewW: 0, viewH: 0, dpr: 1, portrait: false,
-  mode: "title", phase: "idle", phaseT: 0,
+  mode: "title",
   discs: [], blacks: [], bags: [[], []], stock: [[], []], boardBag: [],
-  bigText: "", bigT: 0, holds: [],
-  loser: -1, last: 0, flyers: [], poppers: [],
+  bigText: "", bigT: 0, matches: [],
+  loser: -1, last: 0, flyers: [],
   colorLinks: [], colorGroups: [],
   qSlide: [0, 0], refill: [0, 0],
   pcLeft: false, pcWait: PC_NOMINAL_SPEED, pcPanic: 0.5,
@@ -184,14 +183,12 @@ function newGame() {
     shuffle(state.boardBag);
   }
   placeWell();
-  state.phase = "idle";
-  state.phaseT = 0;
   state.bigText = "";
   state.bigT = 0;
-  state.holds = [];
+  state.matches = [];
   state.loser = -1;
   state.flyers = [];
-  state.poppers = [];
+  clearPops();
   state.qSlide = [0, 0];
   state.refill = [0, 0];
   state.pcWait = PC_NOMINAL_SPEED;
@@ -275,10 +272,6 @@ function shoot(y, side) {
   const hi = state.wallBot - state.discR;
   if (y < lo) y = lo;
   if (y > hi) y = hi;
-  if (state.phase === "idle") {
-    state.bigText = "";
-    state.bigT = 0;
-  }
   const disc = state.bags[side].shift();
   const x0 = side === 0 ? state.boardLeft - state.pitch : state.boardRight + state.pitch;
   const cell = makeDisc(disc.color, x0, y);
@@ -296,10 +289,6 @@ function shoot(y, side) {
   state.flyers.push({ cell: cell, side: side, t: 0, x0: x0, dir: dir, burnFor: BURN * (0.8 + pitches / 18) });
   state.refill[side] = REFILL;
   state.qSlide[side] = 1;
-  if (state.phase !== "settle" && state.phase !== "pop" && state.phase !== "mark") {
-    state.phase = "fly";
-    state.phaseT = 0;
-  }
 }
 
 function update(dt) {
@@ -374,8 +363,7 @@ function update(dt) {
     }
   }
   if (state.mode === "over") return;
-  state.phaseT += dt;
-  
+
   const pitch = state.pitch;
   const rest = pitch;
   const core = pitch * 0.78;
@@ -522,67 +510,66 @@ function update(dt) {
     }
     if (!hit) continue;
     c.by = shot.side;
+    c.live = true;
+    c.settle = SETTLE;
     state.discs.push(c);
     state.flyers.splice(i, 1);
   }
-  for (let i = state.poppers.length - 1; i >= 0; i--) {
-    const pop = state.poppers[i];
-    pop.t += dt;
-    pop.x += pop.vx * dt;
-    pop.y += pop.vy * dt;
-    const u = Math.min(1, pop.t / POP_TIME);
-    pop.sc = 1 + u * 0.28;
-    pop.alpha = 1 - u * u;
-    if (pop.t >= POP_TIME) state.poppers.splice(i, 1);
-  }
   findColorGroups();
-  const slow = pitch * 0.35;
   const groups = state.colorGroups || [];
   for (let i = 0; i < state.discs.length; i++) {
-    const disc = state.discs[i];
-    if (disc.by < 0 || disc.checked || disc.mark) continue;
-    if (Math.sqrt(disc.vx * disc.vx + disc.vy * disc.vy) > slow) continue;
-    let group = null;
-    for (let g = 0; g < groups.length; g++) {
-      const discs = groups[g].discs;
-      for (let k = 0; k < discs.length; k++) {
-        if (discs[k] === disc) { group = groups[g]; break; }
-      }
-      if (group) break;
+    state.discs[i].gid = -1;
+    state.discs[i].mark = false;
+  }
+  for (let g = 0; g < groups.length; g++) {
+    const members = groups[g].discs;
+    for (let k = 0; k < members.length; k++) members[k].gid = g;
+  }
+  const open = [];
+  for (let h = 0; h < state.matches.length; h++) {
+    const match = state.matches[h];
+    const gid = match.owner.gid;
+    if (gid < 0 || groups[gid].discs.length < MATCH) continue;
+    let drop = false;
+    for (let k = 0; k < open.length; k++) {
+      if (open[k].owner.gid !== gid) continue;
+      const newer = state.discs.indexOf(match.owner) > state.discs.indexOf(open[k].owner);
+      const winner = newer ? match : open[k];
+      winner.t = MARK_TIME;
+      winner.members = [];
+      open[k] = winner;
+      drop = true;
+      break;
     }
-    if (!group) {
-      disc.checked = true;
+    if (!drop) open.push(match);
+  }
+  const kept = [];
+  for (let h = 0; h < open.length; h++) {
+    const match = open[h];
+    const group = groups[match.owner.gid];
+    let taker = null;
+    for (let i = state.discs.length - 1; i >= 0; i--) {
+      const disc = state.discs[i];
+      if (disc.gid !== match.owner.gid || disc === match.owner || !disc.live) continue;
+      let was = false;
+      const prev = match.members || [];
+      for (let m = 0; m < prev.length; m++) {
+        if (prev[m] === disc) { was = true; break; }
+      }
+      if (was) continue;
+      taker = disc;
+      break;
+    }
+    if (taker) {
+      match.owner = taker;
+      match.t = MARK_TIME;
+    } else match.t -= dt;
+    match.members = group.discs.slice();
+    if (match.t > 0) {
+      kept.push(match);
       continue;
     }
-    let wait = false;
-    for (let k = 0; k < group.discs.length; k++) {
-      const other = group.discs[k];
-      if (other === disc || other.by < 0 || other.checked || other.mark) continue;
-      if (Math.sqrt(other.vx * other.vx + other.vy * other.vy) > slow) { wait = true; break; }
-    }
-    if (wait) continue;
-    for (let k = 0; k < group.discs.length; k++) {
-      if (group.discs[k].by >= 0) group.discs[k].checked = true;
-    }
-    if (group.discs.length <= MATCH) continue;
-    let left = false;
-    let right = false;
-    for (let k = 0; k < group.discs.length; k++) {
-      const by = group.discs[k].by;
-      if (by === 0) left = true;
-      if (by === 1) right = true;
-    }
-    if (!left && !right) continue;
-    const leftN = left ? group.discs.length : 0;
-    const rightN = right ? group.discs.length : 0;
-    for (let k = 0; k < group.discs.length; k++) group.discs[k].mark = true;
-    state.holds.push({ discs: group.discs.slice(), t: 0, left: left, right: right, leftN: leftN, rightN: rightN });
-  }
-  for (let h = state.holds.length - 1; h >= 0; h--) {
-    const hold = state.holds[h];
-    hold.t += dt;
-    if (hold.t < MARK_TIME) continue;
-    const doomed = hold.discs;
+    const doomed = group.discs;
     const keep = [];
     for (let i = 0; i < state.discs.length; i++) {
       let drop = false;
@@ -592,14 +579,7 @@ function update(dt) {
       if (!drop) keep.push(state.discs[i]);
     }
     state.discs = keep;
-    let exit = 1;
-    if (hold.left && !hold.right) exit = 1;
-    else if (hold.right && !hold.left) exit = -1;
-    else {
-      let mx = 0;
-      for (let d = 0; d < doomed.length; d++) mx += doomed[d].x;
-      exit = mx / doomed.length < state.wellX ? 1 : -1;
-    }
+    const exit = match.owner.by === 0 ? 1 : -1;
     let mx = 0;
     let my = 0;
     for (let d = 0; d < doomed.length; d++) {
@@ -617,32 +597,41 @@ function update(dt) {
     const angCap = pitch * 4;
     if (state.ang > angCap) state.ang = angCap;
     if (state.ang < -angCap) state.ang = -angCap;
-    for (let d = 0; d < doomed.length; d++) {
-      const cell = doomed[d];
-      cell.mark = false;
-      let dir = -exit;
-      if (hold.left && hold.right) dir = cell.by === 0 ? -1 : 1;
-      const ox = cell.x - state.wellX;
-      const oy = cell.y - state.wellY;
-      const od = Math.sqrt(ox * ox + oy * oy) || 1;
-      state.poppers.push({
-        color: cell.color,
-        x: cell.x,
-        y: cell.y,
-        vx: dir * pitch * 2.6 + ox / od * pitch * 1.7,
-        vy: oy / od * pitch * 1.7,
-        t: 0,
-        sc: 1,
-        alpha: 1
-      });
-    }
-    const parts = [];
-    if (hold.leftN) parts.push("LEFT +" + hold.leftN);
-    if (hold.rightN) parts.push("RIGHT +" + hold.rightN);
-    state.bigText = parts.join("  ");
+    for (let d = 0; d < doomed.length; d++) addPop(doomed[d].x, doomed[d].y, doomed[d].color);
+    state.bigText = (match.owner.by === 0 ? "LEFT +" : "RIGHT +") + doomed.length;
     state.bigT = 1.8;
-    state.holds.splice(h, 1);
     placeWell();
+  }
+  const claimed = [];
+  for (let h = 0; h < kept.length; h++) claimed.push(kept[h].owner.gid);
+  for (let i = state.discs.length - 1; i >= 0; i--) {
+    const disc = state.discs[i];
+    if (!disc.live || disc.gid < 0) continue;
+    if (groups[disc.gid].discs.length < MATCH) continue;
+    let taken = false;
+    for (let c = 0; c < claimed.length; c++) {
+      if (claimed[c] === disc.gid) { taken = true; break; }
+    }
+    if (taken) continue;
+    kept.push({ owner: disc, t: MARK_TIME, members: groups[disc.gid].discs.slice() });
+    claimed.push(disc.gid);
+  }
+  for (let h = 0; h < kept.length; h++) {
+    const group = groups[kept[h].owner.gid];
+    if (!group) continue;
+    for (let k = 0; k < group.discs.length; k++) group.discs[k].mark = true;
+  }
+  state.matches = kept;
+  for (let i = 0; i < state.discs.length; i++) {
+    const disc = state.discs[i];
+    if (!disc.live) continue;
+    disc.settle -= dt;
+    if (disc.settle > 0) continue;
+    let owns = false;
+    for (let h = 0; h < state.matches.length; h++) {
+      if (state.matches[h].owner === disc) { owns = true; break; }
+    }
+    if (!owns) disc.live = false;
   }
   if (state.mode === "play") {
     let colors = 0;
@@ -674,7 +663,6 @@ function update(dt) {
   const loss = edgeLoss();
   if (loss.left || loss.right) {
     state.mode = "over";
-    state.phase = "idle";
     state.loser = loss.left && loss.right ? 2 : (loss.left ? 0 : 1);
   }
   state.blackSpin += 0.45 * dt;

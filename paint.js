@@ -3,6 +3,7 @@
   Blacks are #111 with a grey edge. They are not a color.
   Long sides repel, but they are not drawn. End lines are the players.
   bigText / bigT is the player award. Nothing else owns that line.
+  A live shot wears its own color glow. White is the match.
 */
 
 const COLS = [
@@ -17,6 +18,21 @@ const PCOL = ["#ff9f1a", "#3aa0ff"];
 const BLACK_FILL = "#111111";
 const BLACK_EDGE = "#8d939c";
 
+const TAIL_RATE = 3;
+const TAIL_DECAY = 0.07;
+
+const POP_TIME = 0.5;
+const pops = [];
+let paintNow = 0;
+
+function addPop(x, y, color) {
+  pops.push({ x: x, y: y, color: color, t: 0 });
+}
+
+function clearPops() {
+  pops.length = 0;
+}
+
 function mixHex(a, b, t) {
   const pa = parseInt(a.slice(1), 16);
   const pb = parseInt(b.slice(1), 16);
@@ -26,7 +42,7 @@ function mixHex(a, b, t) {
   return "rgb(" + r + "," + g + "," + bl + ")";
 }
 
-function drawDisc(x, y, r, ci, alpha, sc, shine, ring, noShadow, spin) {
+function drawDisc(x, y, r, ci, alpha, sc, shine, ring, noShadow, spin, glow) {
   if (sc <= 0.02 || alpha <= 0.02) return;
   const rr = r * sc;
   const black = ci < 0;
@@ -40,6 +56,13 @@ function drawDisc(x, y, r, ci, alpha, sc, shine, ring, noShadow, spin) {
     ctx.beginPath();
     ctx.arc(0, 0, rr * 1.15, 0, Math.PI * 2);
     ctx.fillStyle = "#000000";
+    ctx.fill();
+  }
+  if (glow && c) {
+    ctx.globalAlpha = alpha * 0.45;
+    ctx.beginPath();
+    ctx.arc(0, 0, rr * 1.25, 0, Math.PI * 2);
+    ctx.fillStyle = c.hi;
     ctx.fill();
   }
   ctx.globalAlpha = alpha;
@@ -69,6 +92,56 @@ function drawDisc(x, y, r, ci, alpha, sc, shine, ring, noShadow, spin) {
     ctx.stroke();
   }
   ctx.restore();
+}
+
+function drawTrail(cell) {
+  if (!cell.trail) cell.trail = [];
+  for (let i = cell.trail.length - 1; i >= 0; i--) {
+    cell.trail[i].life -= TAIL_DECAY;
+    if (cell.trail[i].life <= 0.02) cell.trail.splice(i, 1);
+  }
+  cell.trailFrame = (cell.trailFrame || 0) + 1;
+  if (!cell.trail.length || cell.trailFrame >= TAIL_RATE) {
+    cell.trailFrame = 0;
+    cell.trail.unshift({ x: cell.x, y: cell.y, life: 1 });
+  }
+  const col = COLS[cell.color];
+  if (!col) return;
+  for (let i = cell.trail.length - 1; i >= 0; i--) {
+    const ghost = cell.trail[i];
+    ctx.globalAlpha = 0.65 * ghost.life;
+    ctx.beginPath();
+    ctx.arc(ghost.x, ghost.y, state.discR * ghost.life, 0, Math.PI * 2);
+    ctx.fillStyle = col.fill;
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawPops() {
+  const step = paintNow - (drawPops.last || paintNow);
+  drawPops.last = paintNow;
+  const dt = step > 0.05 ? 0.05 : step;
+  const edgeW = Math.max(1.6, state.discR * 0.11);
+  for (let i = pops.length - 1; i >= 0; i--) {
+    const pop = pops[i];
+    pop.t += dt;
+    const u = pop.t / POP_TIME;
+    if (u >= 1) {
+      pops.splice(i, 1);
+      continue;
+    }
+    const col = COLS[pop.color];
+    if (!col) continue;
+    const left = Math.pow(u,1.5);
+    ctx.globalAlpha = Math.pow(1 - u, 1.5);
+    ctx.beginPath();
+    ctx.arc(pop.x, pop.y, state.discR * (1.1 + 4 * left), 0, Math.PI * 2);
+    ctx.lineWidth = edgeW * (1+u);
+    ctx.strokeStyle = mixHex(col.fill, col.hi, 0.5);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
 }
 
 function drawColorLinks() {
@@ -130,6 +203,7 @@ function drawQueue(p) {
 }
 
 function draw() {
+  paintNow = performance.now() / 1000;
   const dpr = state.dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   if (state.portrait) {
@@ -187,18 +261,19 @@ function draw() {
   drawColorLinks();
   const discs = state.discs || [];
   for (let i = 0; i < discs.length; i++) {
+    if (discs[i].live) drawTrail(discs[i]);
+    else discs[i].trail = null;
+  }
+  for (let i = 0; i < state.flyers.length; i++) drawTrail(state.flyers[i].cell);
+  for (let i = 0; i < discs.length; i++) {
     const c = discs[i];
-    drawDisc(c.x, c.y, state.discR, c.color, 1, 1, c.color >= 0, c.mark ? "#ffffff" : "", false, c.color < 0 ? state.blackSpin : 0);
+    drawDisc(c.x, c.y, state.discR, c.color, 1, 1, c.color >= 0, c.mark ? "#ffffff" : "", false, c.color < 0 ? state.blackSpin : 0, c.live);
   }
   for (let i = 0; i < state.flyers.length; i++) {
     const c = state.flyers[i].cell;
-    drawDisc(c.x, c.y, state.discR, c.color, 1, 1, true);
+    drawDisc(c.x, c.y, state.discR, c.color, 1, 1, true, "", false, 0, true);
   }
-  const poppers = state.poppers || [];
-  for (let i = 0; i < poppers.length; i++) {
-    const pop = poppers[i];
-    drawDisc(pop.x, pop.y, state.discR, pop.color, pop.alpha, pop.sc, false, "", true);
-  }
+  drawPops();
 
   drawQueue(0);
   drawQueue(1);
