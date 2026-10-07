@@ -14,7 +14,7 @@ const COLS = [
   { fill: "#2ee06a", hi: "#b5ffd1" },
   { fill: "#3aa0ff", hi: "#b8ddff" }
 ];
-const BG = "#07080d";
+const BG = "#111111";
 const PCOL = ["#ff9f1a", "#3aa0ff"];
 const BLACK_FILL = "#111111";
 const BLACK_EDGE = "#8d939c";
@@ -27,11 +27,12 @@ const pops = [];
 let paintNow = 0;
 let lastPopColor = -1;
 
-const FLOW_N = 164;
+const FLOW_N = 192;
 const flowBits = [];
 let flowStamp = 0;
 
 function addPop(x, y, color) {
+  lastPopColor = color;
   pops.push({ x: x, y: y, color: color, t: 0 });
 }
 
@@ -171,10 +172,10 @@ function drawFlow() {
   flowStamp = paintNow;
   const dt = step > 0 && step < 0.05 ? step : 0.016;
   const pitch = state.pitch || 1;
-  const flow = state.px * pitch * 0.35;
-  const thick = Math.max(3.0, state.discR * 0.22);
+  const flow = state.px * pitch * 0.4;
+  const thick = Math.max(2.0, state.discR * 0.13);
   const alpha = 0.35 + 0.3 * Math.min(1, Math.abs(state.px) / 4);
-  const shade = lastPopColor >= 0 ? COLS[lastPopColor].fill : "#9aa0a8";
+  const shade = lastPopColor >= 0 ? COLS[lastPopColor].hi : "#999999";
   ctx.save();
   ctx.lineCap = "round";
   ctx.lineWidth = thick;
@@ -195,10 +196,9 @@ function drawFlow() {
     const spd = Math.sqrt(vx * vx + vy * vy);
     const nx = spd < 0.01 ? 1 : vx / spd;
     const ny = spd < 0.01 ? 0 : vy / spd;
-    const dash = thick * (0 + Math.min(1, spd / (pitch * 0.1)));
+    const dash = thick * (0.2 + Math.min(2, spd / (pitch * 0.1)));
     const px = bit.x + ox;
-    const py = bit.y + oy;
-    ctx.globalAlpha = alpha * bit.tint;
+    const py = bit.y + oy;    
     ctx.beginPath();
     ctx.moveTo(px - nx * dash * 0.5, py - ny * dash * 0.5);
     ctx.lineTo(px + nx * dash * 0.5, py + ny * dash * 0.5);
