@@ -4,6 +4,7 @@
   Long sides repel, but they are not drawn. End lines are the players.
   bigText / bigT is the player award. Nothing else owns that line.
   A live shot wears its own color glow. White is the match.
+  Flow dashes ride state.px. They are paint only.
 */
 
 const COLS = [
@@ -24,6 +25,11 @@ const TAIL_DECAY = 0.07;
 const POP_TIME = 0.5;
 const pops = [];
 let paintNow = 0;
+let lastPopColor = -1;
+
+const FLOW_N = 164;
+const flowBits = [];
+let flowStamp = 0;
 
 function addPop(x, y, color) {
   pops.push({ x: x, y: y, color: color, t: 0 });
@@ -133,15 +139,72 @@ function drawPops() {
     }
     const col = COLS[pop.color];
     if (!col) continue;
-    const left = Math.pow(u,1.5);
+    const left = Math.pow(u, 1.5);
     ctx.globalAlpha = Math.pow(1 - u, 1.5);
     ctx.beginPath();
     ctx.arc(pop.x, pop.y, state.discR * (1.1 + 4 * left), 0, Math.PI * 2);
-    ctx.lineWidth = edgeW * (1+u);
+    ctx.lineWidth = edgeW * (1 + u);
     ctx.strokeStyle = mixHex(col.fill, col.hi, 0.5);
     ctx.stroke();
   }
   ctx.globalAlpha = 1;
+}
+
+function drawFlow() {
+  const w = state.w;
+  const h = state.h;
+  if (w < 2 || h < 2) return;
+  if (flowBits.length !== FLOW_N) {
+    flowBits.length = 0;
+    for (let i = 0; i < FLOW_N; i++) {
+      flowBits.push({
+        x: Math.random() * w,
+        y: Math.random() * h,
+        ang: Math.random() * Math.PI * 2,
+        spin: (Math.random() * 2 - 1) * 0.4,
+        v: 2.4 + Math.random() * 2.8,
+        tint: 0.82 + Math.random() * 0.18
+      });
+    }
+  }
+  const step = paintNow - flowStamp;
+  flowStamp = paintNow;
+  const dt = step > 0 && step < 0.05 ? step : 0.016;
+  const pitch = state.pitch || 1;
+  const flow = state.px * pitch * 0.35;
+  const thick = Math.max(3.0, state.discR * 0.22);
+  const alpha = 0.35 + 0.3 * Math.min(1, Math.abs(state.px) / 4);
+  const shade = lastPopColor >= 0 ? COLS[lastPopColor].fill : "#9aa0a8";
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.lineWidth = thick;
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = shade;
+  for (let i = 0; i < flowBits.length; i++) {
+    const bit = flowBits[i];
+    bit.ang += bit.spin * dt;
+    bit.x += flow * dt;
+    bit.x = bit.x % w;
+    if (bit.x < 0) bit.x += w;
+    bit.y = bit.y % h;
+    if (bit.y < 0) bit.y += h;
+    const ox = Math.cos(bit.ang) * bit.v;
+    const oy = Math.sin(bit.ang) * bit.v;
+    const vx = flow - Math.sin(bit.ang) * bit.v * bit.spin;
+    const vy = Math.cos(bit.ang) * bit.v * bit.spin;
+    const spd = Math.sqrt(vx * vx + vy * vy);
+    const nx = spd < 0.01 ? 1 : vx / spd;
+    const ny = spd < 0.01 ? 0 : vy / spd;
+    const dash = thick * (0 + Math.min(1, spd / (pitch * 0.1)));
+    const px = bit.x + ox;
+    const py = bit.y + oy;
+    ctx.globalAlpha = alpha * bit.tint;
+    ctx.beginPath();
+    ctx.moveTo(px - nx * dash * 0.5, py - ny * dash * 0.5);
+    ctx.lineTo(px + nx * dash * 0.5, py + ny * dash * 0.5);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawColorLinks() {
@@ -235,6 +298,8 @@ function draw() {
     return;
   }
 
+  drawFlow();
+
   ctx.save();
   ctx.lineWidth = 2;
   ctx.strokeStyle = "#666666";
@@ -242,7 +307,7 @@ function draw() {
   ctx.moveTo(state.w * 0.5, state.wallTop);
   ctx.lineTo(state.w * 0.5, state.wallBot);
   ctx.stroke();
-  ctx.lineWidth = 3;  
+  ctx.lineWidth = 3;
   ctx.strokeStyle = "#888844";
   ctx.globalAlpha = state.mode === "play" ? 0.95 : 0.28;
   ctx.beginPath();
