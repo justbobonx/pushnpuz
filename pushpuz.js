@@ -22,12 +22,12 @@ const MARK_TIME = 0.5;
 const QUEUE_SLIDE = 0.26;
 const REFILL = 0.5;
 const PC_GAP = 2.6;
+const PC_NOMINAL_SPEED = 2.4;
+const PC_FULL_PANIC_SPEED = 0.4;
 const SUBSTEPS = 8;
 const BURN = 0.14;
 const GROW = 2;
-const GROW_FAST = 0.92;
-const GROW_SLOW = 1.08;
-const GROW_MIN = 0.45;
+const GROW_MIN = 0.1;
 const GROW_MAX = 4;
 const BOARD_NOMINAL = 32;
 const DISCS_PER_W = 65;
@@ -51,6 +51,15 @@ const state = {
   pitch: 0, half: 0, discR: 0, wellX: 0, wellY: 0, armGame: false, grow: GROW, growWait: GROW, px: 0, py: 0, ang: 0, mobI: 1,
   pcButton: { x: 0, y: 0, r: 0 }
 };
+
+
+function growInterval(colors) {
+  const t = colors / BOARD_NOMINAL;
+  let wait = GROW * t * t;
+  if (wait < GROW_MIN) wait = GROW_MIN;
+  if (wait > GROW_MAX) wait = GROW_MAX;
+  return wait;
+}
 
 function shuffle(list) {
   for (let i = list.length - 1; i > 0; i--) {
@@ -337,14 +346,14 @@ function update(dt) {
           }
         }
         shoot(bestY, 0);
-        const gap = 2.4 + (0.62 - 2.4) * panic;
+        const gap = PC_NOMINAL_SPEED + (PC_FULL_PANIC_SPEED - PC_NOMINAL_SPEED) * panic;
         state.pcWait = gap * (0.88 + Math.random() * 0.24);
       } else state.pcWait = 0.35;
     }
   }
   if (state.mode === "over") return;
   state.phaseT += dt;
-
+  
   const pitch = state.pitch;
   const rest = pitch;
   const core = pitch * 0.78;
@@ -659,6 +668,13 @@ function update(dt) {
     state.holds.splice(h, 1);
   }
   if (state.mode === "play") {
+    let colors = 0;
+    for (let i = 0; i < state.discs.length; i++) {
+      if (state.discs[i].color >= 0) colors += 1;
+    }
+    const want = growInterval(colors);
+    state.growWait = want;
+    if (state.grow > want) state.grow = want;
     state.grow -= dt;
     if (state.grow <= 0) {
       const born = makeDisc(takeBoardColor(), state.wellX, state.wellY);
@@ -675,15 +691,8 @@ function update(dt) {
         other.vy += dy / dist * push;
       }
       state.discs.push(born);
-      let colors = 0;
-      for (let i = 0; i < state.discs.length; i++) {
-        if (state.discs[i].color >= 0) colors += 1;
-      }
-      if (colors < BOARD_NOMINAL) state.growWait *= GROW_FAST;
-      else if (colors > BOARD_NOMINAL) state.growWait *= GROW_SLOW;
-      if (state.growWait < GROW_MIN) state.growWait = GROW_MIN;
-      if (state.growWait > GROW_MAX) state.growWait = GROW_MAX;
-      state.grow = state.growWait;
+      state.grow = growInterval(colors + 1);
+      state.growWait = state.grow;
     }
   }
   const loss = edgeLoss();
