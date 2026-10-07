@@ -599,7 +599,7 @@ function update(dt) {
     if (state.ang < -angCap) state.ang = -angCap;
     for (let d = 0; d < doomed.length; d++) addPop(doomed[d].x, doomed[d].y, doomed[d].color);
     state.bigText = (match.owner.by === 0 ? "LEFT +" : "RIGHT +") + doomed.length;
-    state.bigT = 1.8;
+    state.bigT = 4;
     placeWell();
   }
   const claimed = [];

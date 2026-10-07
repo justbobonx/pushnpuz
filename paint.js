@@ -236,14 +236,19 @@ function draw() {
   }
 
   ctx.save();
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = PCOL[0];
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "#666666";
+  ctx.beginPath();
+  ctx.moveTo(state.w * 0.5, state.wallTop);
+  ctx.lineTo(state.w * 0.5, state.wallBot);
+  ctx.stroke();
+  ctx.lineWidth = 3;  
+  ctx.strokeStyle = "#888844";
   ctx.globalAlpha = state.mode === "play" ? 0.95 : 0.28;
   ctx.beginPath();
   ctx.moveTo(state.boardLeft, state.wallTop);
   ctx.lineTo(state.boardLeft, state.wallBot);
   ctx.stroke();
-  ctx.strokeStyle = PCOL[1];
   ctx.beginPath();
   ctx.moveTo(state.boardRight, state.wallTop);
   ctx.lineTo(state.boardRight, state.wallBot);
@@ -281,11 +286,11 @@ function draw() {
   ctx.save();
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillStyle = "#d7ecff";
-  const small = Math.max(13, state.h * 0.04);
+  ctx.fillStyle = "#999966";
+  const small = Math.max(20, state.h * 0.06);
   ctx.font = "600 " + small + "px ui-sans-serif, system-ui, sans-serif";
   if (state.mode === "over") {
-    const msg = state.loser === 2 ? "BOTH OUT" : (state.loser === 0 ? "LEFT OUT" : "RIGHT OUT");
+    const msg = state.loser === 2 ? "BOTH OUT" : (state.loser === 0 ? "RIGHT WIND" : "LEFT WINS");
     ctx.fillText(msg, state.w * 0.5, Math.max(small, state.wallTop * 0.5));
     ctx.font = "400 " + (small * 0.72) + "px ui-sans-serif, system-ui, sans-serif";
     ctx.fillText("tap to restart", state.w * 0.5, state.wallBot + (state.h - state.wallBot) * 0.45);
