@@ -203,6 +203,7 @@ function drawFlow() {
     ctx.moveTo(px - nx * dash * 0.5, py - ny * dash * 0.5);
     ctx.lineTo(px + nx * dash * 0.5, py + ny * dash * 0.5);
     ctx.stroke();
+    ctx.beginPath();
   }
   ctx.restore();
 }
