@@ -8,11 +8,11 @@
 */
 
 const COLS = [
-  { fill: "#ff3b5c", hi: "#ffb6c6" },
-  { fill: "#ff9f1a", hi: "#ffe3b8" },
-  { fill: "#bb2bff", hi: "#db88ff" },
-  { fill: "#2ee06a", hi: "#b5ffd1" },
-  { fill: "#3aa0ff", hi: "#b8ddff" }
+  { fill: "#ff3b5c", hi: "#ffb6c6", inner: "#8a0d23" },
+  { fill: "#ff9f1a", hi: "#ffd4b8", inner: "#8e5100" },
+  { fill: "#bb2bff", hi: "#db88ff", inner: "#5a127e" },
+  { fill: "#2ee06a", hi: "#b5ffd1", inner: "#0b5624" },
+  { fill: "#3aa0ff", hi: "#b8ddff", inner: "#0e3d6a" }
 ];
 const BG = "#111111";
 const PCOL = ["#ff9f1a", "#3aa0ff"];
