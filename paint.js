@@ -164,23 +164,22 @@ function drawFlow() {
         ang: Math.random() * Math.PI * 2,
         spin: (Math.random() * 2 - 1) * 0.4,
         v: 2.4 + Math.random() * 2.8,
-        tint: 0.82 + Math.random() * 0.18
+        tint: 0.82 + Math.random() * 0.18,
+        size: 0.3 + Math.random() * .5
       });
     }
   }
   const step = paintNow - flowStamp;
   flowStamp = paintNow;
   const dt = step > 0 && step < 0.05 ? step : 0.016;
-  const pitch = state.pitch || 1;
-  const flow = state.px * pitch * 0.4;
-  const thick = Math.max(2.0, state.discR * 0.13);
-  const alpha = 0.35 + 0.3 * Math.min(1, Math.abs(state.px) / 4);
+  const discR = state.discR;
+  const flow = state.px * discR * (0.4 / 0.34);
+  const alpha = 0.1 + 0.3 * Math.min(1, Math.abs(state.px) / 5);
   const shade = lastPopColor >= 0 ? COLS[lastPopColor].hi : "#999999";
+  const base = ctx.getTransform();
   ctx.save();
-  ctx.lineCap = "round";
-  ctx.lineWidth = thick;
   ctx.globalAlpha = alpha;
-  ctx.strokeStyle = shade;
+  ctx.fillStyle = shade;
   for (let i = 0; i < flowBits.length; i++) {
     const bit = flowBits[i];
     bit.ang += bit.spin * dt;
@@ -189,23 +188,26 @@ function drawFlow() {
     if (bit.x < 0) bit.x += w;
     bit.y = bit.y % h;
     if (bit.y < 0) bit.y += h;
-    const ox = Math.cos(bit.ang) * bit.v;
-    const oy = Math.sin(bit.ang) * bit.v;
-    const vx = flow - Math.sin(bit.ang) * bit.v * bit.spin;
-    const vy = Math.cos(bit.ang) * bit.v * bit.spin;
-    const spd = Math.sqrt(vx * vx + vy * vy);
-    const nx = spd < 0.01 ? 1 : vx / spd;
-    const ny = spd < 0.01 ? 0 : vy / spd;
-    const dash = thick * (0.2 + Math.min(2, spd / (pitch * 0.1)));
-    const px = bit.x + ox;
-    const py = bit.y + oy;    
+    const s = Math.sin(bit.ang);
+    const c = Math.cos(bit.ang);
+    const vx = flow - s * bit.v * bit.spin;
+    const vy = c * bit.v * bit.spin;
+    const spd = Math.hypot(vx, vy);
+    const spd_part = Math.min(1, spd * 1.7 / discR);
+    const thick = discR * bit.size * (1 - spd_part / 4);
+    const dash = discR * bit.size * (1 + 3 * spd_part);
+    const px = bit.x + c * bit.v;
+    const py = bit.y + s * bit.v;
+    if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
+    ctx.setTransform(base);
+    ctx.translate(px, py);
+    ctx.rotate(Math.atan2(vy, vx));
+    ctx.scale(dash / thick, 1);
     ctx.beginPath();
-    ctx.moveTo(px - nx * dash * 0.5, py - ny * dash * 0.5);
-    ctx.lineTo(px + nx * dash * 0.5, py + ny * dash * 0.5);
-    ctx.stroke();
-    ctx.beginPath();
+    ctx.arc(0, 0, thick * 0.5, 0, Math.PI * 2);
+    ctx.fill();
   }
-  ctx.restore();
+  ctx.restore();	
 }
 
 function drawColorLinks() {
