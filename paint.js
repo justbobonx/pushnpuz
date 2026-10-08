@@ -8,11 +8,11 @@
 */
 
 const COLS = [
-  { fill: "#ff3b5c", hi: "#ffb6c6", inner: "#8a0d23" },
-  { fill: "#ff9f1a", hi: "#ffd4b8", inner: "#8e5100" },
-  { fill: "#bb2bff", hi: "#db88ff", inner: "#5a127e" },
-  { fill: "#2ee06a", hi: "#b5ffd1", inner: "#0b5624" },
-  { fill: "#3aa0ff", hi: "#b8ddff", inner: "#0e3d6a" }
+  { fill: "#ff3b5c", hi: "#ffb6c6", inner: "#ea294a" },
+  { fill: "#ff9f1a", hi: "#ffd4b8", inner: "#fa8d00" },
+  { fill: "#bb2bff", hi: "#db88ff", inner: "#9c20dd" },
+  { fill: "#2ee06a", hi: "#b5ffd1", inner: "#16c14f" },
+  { fill: "#3aa0ff", hi: "#b8ddff", inner: "#318ce2" }
 ];
 const BG = "#111111";
 const PCOL = ["#ff9f1a", "#3aa0ff"];
@@ -90,13 +90,24 @@ function drawDisc(x, y, r, ci, alpha, sc, shine, ring, noShadow, spin, glow) {
     ctx.arc(rr * 0.28, rr * 0.32, rr * 0.1, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(176, 180, 186, 0.8)";
     ctx.fill();
-  } else if (shine) {
+  } else {
+    ctx.save();
     ctx.beginPath();
-    ctx.arc(0, 0, rr * 0.72, Math.PI * 1.08, Math.PI * 1.78);
-    ctx.strokeStyle = "rgba(255,255,255,0.78)";
-    ctx.lineWidth = Math.max(1.5, rr * 0.14);
-    ctx.lineCap = "round";
-    ctx.stroke();
+    ctx.arc(0, 0, rr - outline * 0.45, 0, Math.PI * 2);
+    ctx.clip();
+    // ctx.beginPath();
+    // ctx.arc(rr * 0.1, rr * 0.1, rr * 0.6, 0, Math.PI * 2);
+    // ctx.fillStyle = c.inner;
+    // ctx.fill();
+    ctx.restore();
+    if (shine) {
+      ctx.beginPath();
+      ctx.arc(0, 0, rr * 0.65, Math.PI * 1.08, Math.PI * 1.78);
+      ctx.strokeStyle = "rgba(255,255,255,0.4)";
+      ctx.lineWidth = Math.max(2.3, rr * 0.23);
+      ctx.lineCap = "round";
+      ctx.stroke();
+    }
   }
   ctx.restore();
 }
