@@ -8,7 +8,7 @@
   soft wells, so a shove becomes a drift instead of a bounce.
   A weak pull toward the bunch center keeps the cloud together. It does not pin it.
   Blacks pull that center a little harder so the triangle stays with the mob.
-  A match deposits momentum at the cluster. A 4-match is one unit. Bigger matches add more. Offset from the center becomes spin. Both decay over a few seconds.
+  A match is a stroke. Unit is group length / 4, times pxBase. pxBase starts at 1 and steps up on every clear, so a long volley inflates the pace. Same side adds that unit to px. The other side flips px and sets it to unit * (unit / |px|). A dead px is set to the unit. Cap is 4 * pxBase. Fade slows as pxBase rises. Offset from the center still adds spin, and spin is not flipped. Refill speeds up when the colored blob runs thin.
   A shot stays live for its settle window. A color link of MATCH or more lights that group and starts the fuse. The match stays with the owner disc. Links can grow it or cancel it. Another live shot that links in takes it and resets the fuse.
   Shots stay straight until they join. Launch speed covers the distance to the blob center.
   Long sides repel to infinity inside a short band. Ends stay open.
@@ -46,15 +46,15 @@ const state = {
   qSlide: [0, 0], refill: [0, 0],
   pcLeft: false, pcWait: PC_NOMINAL_SPEED, pcPanic: 0.5,
   boardLeft: 0, boardRight: 0, wallTop: 0, wallBot: 0, wallBand: 0,
-  pitch: 0, discR: 0, wellX: 0, wellY: 0, armGame: false, grow: GROW, px: 0, py: 0, ang: 0, mobI: 1, blackSpin: 0,
+  pitch: 0, discR: 0, wellX: 0, wellY: 0, armGame: false, grow: GROW, pxBase: 1, px: 0, py: 0, ang: 0, mobI: 1, blackSpin: 0,
   pcButton: { x: 0, y: 0, r: 0 }
 };
 
 
 function growInterval(colors) {
-  const t = colors / BOARD_NOMINAL;
-  let wait = GROW * t * t;
-  if (wait < GROW_MIN) wait = GROW_MIN;
+  let fill = colors / BOARD_NOMINAL;
+  if (fill > 1) fill = 1;
+  let wait = GROW_MIN + (GROW - GROW_MIN) * fill * fill;
   if (wait > GROW_MAX) wait = GROW_MAX;
   return wait;
 }
@@ -196,6 +196,7 @@ function newGame() {
   state.mode = "play";
   state.armGame = false;
   state.grow = GROW;
+  state.pxBase = 1;
   state.px = 0;
   state.py = 0;
   state.ang = 0;
@@ -588,12 +589,17 @@ function update(dt) {
     }
     mx /= doomed.length;
     my /= doomed.length;
-    const unit = doomed.length / 4;
+    state.pxBase += 0.025;
+    const unit = (doomed.length / 4) * state.pxBase;
     const ry = my - state.wellY;
-    state.px += exit * unit;
+    const prev = state.px;
+    const cap = 4 * state.pxBase;
+    if (Math.abs(prev) < 0.05) state.px = exit * unit;
+    else if ((prev > 0) === (exit > 0)) state.px += exit * unit;
+    else state.px = -Math.sign(prev) * unit * (unit / Math.abs(prev));
+    if (state.px > cap) state.px = cap;
+    if (state.px < -cap) state.px = -cap;
     state.ang += exit * (-ry) * unit;
-    if (state.px > 4) state.px = 4;
-    if (state.px < -4) state.px = -4;
     const angCap = pitch * 4;
     if (state.ang > angCap) state.ang = angCap;
     if (state.ang < -angCap) state.ang = -angCap;
@@ -666,8 +672,9 @@ function update(dt) {
     state.loser = loss.left && loss.right ? 2 : (loss.left ? 0 : 1);
   }
   state.blackSpin += 0.45 * dt;
+  const pxRate = 0.2 - 0.08 * Math.min(1, state.pxBase - 1);
+  state.px *= Math.exp(-pxRate * dt);
   const fade = Math.exp(-0.2 * dt);
-  state.px *= fade;
   state.py *= fade;
   state.ang *= fade;
   placeWell();
